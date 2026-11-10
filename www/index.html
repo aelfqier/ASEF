@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1f1a">
+<title>ASEF</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true">A</span><span>ASEF</span></div>
+  <div class="top-date" id="topDate"></div>
+</header>
+
+<main>
+  <!-- Home -->
+  <section class="view" id="view-home" data-view="home">
+    <div class="hero">
+      <div class="hero-label">Total balance</div>
+      <div class="hero-amount" id="heroBalance">0.00</div>
+      <div class="hero-sub" id="heroSub"></div>
+      <div class="cur-row" id="curRow"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2 id="monthTitle">This month</h2></div>
+      <div class="flow">
+        <div class="flow-item in"><span>Income</span><strong id="mIn">0</strong></div>
+        <div class="flow-item out"><span>Expenses</span><strong id="mOut">0</strong></div>
+        <div class="flow-item net"><span>Net</span><strong id="mNet">0</strong></div>
+      </div>
+      <div class="cats" id="mCats"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Today</h2><span class="muted" id="todayNet"></span></div>
+      <div id="todayList" class="list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Recent</h2><button class="link" data-go="history">See all</button></div>
+      <div id="recentList" class="list"></div>
+    </div>
+  </section>
+
+  <!-- History -->
+  <section class="view" id="view-history" data-view="history" hidden>
+    <div class="seg" id="periodSeg" role="tablist">
+      <button data-period="day">Day</button><button data-period="week">Week</button><button data-period="month" class="on">Month</button><button data-period="all">All</button>
+    </div>
+    <div class="period-nav">
+      <button class="icon-btn" id="prevPeriod" aria-label="Previous">‹</button>
+      <div id="periodLabel"></div>
+      <button class="icon-btn" id="nextPeriod" aria-label="Next">›</button>
+    </div>
+    <div class="flow card">
+      <div class="flow-item in"><span>Income</span><strong id="pIn">0</strong></div>
+      <div class="flow-item out"><span>Expenses</span><strong id="pOut">0</strong></div>
+      <div class="flow-item net"><span>Net</span><strong id="pNet">0</strong></div>
+    </div>
+    <div id="historyList"></div>
+  </section>
+
+  <!-- Settings -->
+  <section class="view" id="view-settings" data-view="settings" hidden>
+    <div class="card">
+      <h2>Main currency</h2>
+      <p class="muted">Your total balance is shown in this currency.</p>
+      <div class="seg" id="mainSeg"></div>
+    </div>
+    <div class="card">
+      <h2>Exchange rates</h2>
+      <p class="muted">Used only to add everything up in one total. Update them when rates move.</p>
+      <label class="rate">1 EUR = <input id="rateEUR" inputmode="decimal"> MAD</label>
+      <label class="rate">1 USD = <input id="rateUSD" inputmode="decimal"> MAD</label>
+    </div>
+    <div class="card">
+      <h2>Categories</h2>
+      <form id="catForm" class="cat-form">
+        <select id="catType"><option value="expense">Expense</option><option value="income">Income</option></select>
+        <input id="catName" placeholder="New category" maxlength="30">
+        <button class="btn small" type="submit">Add</button>
+      </form>
+      <div id="catList"></div>
+    </div>
+    <div class="card">
+      <h2>Your data</h2>
+      <p class="muted">Everything stays on this phone. Export a copy as a spreadsheet file.</p>
+      <button class="btn ghost" id="exportCsv">Export CSV</button>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button data-go="home" class="on"><span class="ti">◉</span>Home</button>
+  <button class="add-btn" id="addBtn" aria-label="Add income or expense">+</button>
+  <button data-go="history"><span class="ti">☰</span>History</button>
+  <button data-go="settings"><span class="ti">⚙</span>Settings</button>
+</nav>
+
+<dialog id="sheet" class="sheet">
+  <form method="dialog" id="entryForm" novalidate>
+    <div class="sheet-head">
+      <h2 id="sheetTitle">New entry</h2>
+      <button type="button" class="icon-btn" id="closeSheet" aria-label="Close">✕</button>
+    </div>
+    <div class="seg type-seg" id="typeSeg">
+      <button type="button" data-type="expense" class="on">Expense</button><button type="button" data-type="income">Income</button>
+    </div>
+    <div class="amount-row">
+      <input id="fAmount" inputmode="decimal" placeholder="0.00" autocomplete="off" aria-label="Amount">
+      <div class="seg cur-seg" id="curSeg"></div>
+    </div>
+    <div class="err" id="amountErr" hidden>Enter an amount above zero.</div>
+    <div class="chips" id="catChips"></div>
+    <div class="err" id="catErr" hidden>Pick a category.</div>
+    <div class="row2">
+      <label>Date<input type="date" id="fDate"></label>
+      <label>Note<input id="fNote" maxlength="120" placeholder="Optional"></label>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger ghost" id="delBtn" hidden>Delete</button>
+      <button type="submit" class="btn" id="saveBtn" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastUndo">Undo</button></div>
+
+<script src="js/logic.js"></script>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
