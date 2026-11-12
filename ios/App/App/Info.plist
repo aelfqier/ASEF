@@ -2,6 +2,36 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.github.aelfqier.asef</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>asef</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>io.github.aelfqier.asef.expense</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Add expense</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeRemove</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>io.github.aelfqier.asef.income</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Add income</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeAdd</string>
+		</dict>
+	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock ASEF with Face ID instead of typing your PIN.</string>
   <key>CAPACITOR_DEBUG</key>

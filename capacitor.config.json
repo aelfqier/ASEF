@@ -2,5 +2,13 @@
   "appId": "io.github.aelfqier.asef",
   "appName": "ASEF",
   "webDir": "www",
-  "backgroundColor": "#0a0a0a"
+  "backgroundColor": "#0a0a0a",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "LocalNotifications": {
+      "iconColor": "#8A0303"
+    }
+  }
 }

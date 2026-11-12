@@ -347,6 +347,7 @@
     const asset = { id, name, kind: i.kind, currency: i.currency, values: [{ date: i.date, value: i.value }] };
     if (i.cost != null) asset.cost = i.cost;
     if (i.note) asset.note = String(i.note).trim();
+    if (i.quote) { const q = cleanQuote(i.quote, i.kind); if (!q) return { error: "quote" }; asset.quote = q; }
     return { assets: [...assets, asset], id };
   }
 
@@ -529,7 +530,7 @@
   function emptyState() {
     return {
       schema: SCHEMA,
-      settings: { main: "MAD", rates: { ...DEFAULT_RATES }, backupReminder: true },
+      settings: { main: "MAD", rates: { ...DEFAULT_RATES }, backupReminder: true, liveRates: true, billReminders: true, budgetAlerts: true, remindBefore: 1 },
       categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
       accounts: DEFAULT_ACCOUNTS.map((a) => ({ ...a })),
       entries: [],
@@ -558,6 +559,10 @@
     else settings.lock = { salt: settings.lock.salt, iter: settings.lock.iter, hash: settings.lock.hash, bio: !!settings.lock.bio };
     if (!isDay(settings.lastBackup)) delete settings.lastBackup;
     settings.backupReminder = settings.backupReminder !== false;
+    settings.liveRates = settings.liveRates !== false;
+    settings.billReminders = settings.billReminders !== false;
+    settings.budgetAlerts = settings.budgetAlerts !== false;
+    settings.remindBefore = [0, 1, 3].includes(settings.remindBefore) ? settings.remindBefore : 1;
     const categories = Array.isArray(s.categories) && s.categories.length ? s.categories.filter((c) => c && c.id && c.name && (c.type === "income" || c.type === "expense")) : base.categories;
     // Any built-in category that went missing comes back, so old entries always have a home.
     for (const d of DEFAULT_CATEGORIES) if (!categories.some((c) => c.id === d.id)) categories.push({ ...d });
@@ -583,6 +588,7 @@
         const out = { id: a.id, name: a.name, kind: a.kind, currency: a.currency, values };
         if (Number.isSafeInteger(a.cost) && a.cost >= 0) out.cost = a.cost;
         if (typeof a.note === "string" && a.note) out.note = a.note;
+        const q = cleanQuote(a.quote, a.kind); if (q) out.quote = q;
         return out;
       }).filter((a) => a.values.length) : [];
     // A link to an asset that no longer exists is dropped; the entry stays.
@@ -611,6 +617,182 @@
     const rows = [["date", "type", "category", "amount", "currency", "account", "note"]];
     for (const e of sortEntries(entries)) rows.push([e.date, e.type, name(e.category), (e.amount / 100).toFixed(2), e.currency, acc(e.account), e.note || ""]);
     return rows.map((r) => r.map(q).join(",")).join("\n") + "\n";
+  }
+
+  /* ---------- live prices ---------- */
+  // Assets of these kinds can follow a market price: a quantity times the latest price.
+  const QUOTE_TYPES = { gold: "gold", crypto: "crypto", stocks: "stock" };
+  const TROY_OUNCE_GRAMS = 31.1034768;
+  const COINS = { BTC: "bitcoin", ETH: "ethereum", USDT: "tether", USDC: "usd-coin", BNB: "binancecoin", SOL: "solana", XRP: "ripple",
+    ADA: "cardano", DOGE: "dogecoin", TRX: "tron", TON: "the-open-network", DOT: "polkadot", LTC: "litecoin", AVAX: "avalanche-2", LINK: "chainlink" };
+  const coinId = (symbol) => { const s = String(symbol || "").trim(); return COINS[s.toUpperCase()] || s.toLowerCase(); };
+
+  // Returns a clean quote, or null when it can't be priced.
+  function cleanQuote(q, kind) {
+    if (!q || typeof q !== "object") return null;
+    const type = QUOTE_TYPES[kind];
+    const qty = Number(q.qty);
+    if (!type || !(qty > 0) || !isFinite(qty)) return null;
+    if (type === "gold") { const k = Number(q.karat) || 24; return { type, qty, karat: Math.min(24, Math.max(1, Math.round(k))) }; }
+    const symbol = String(q.symbol || "").trim();
+    if (!symbol || symbol.length > 20 || !/^[A-Za-z0-9.\-^=]+$/.test(symbol)) return null;
+    return { type, qty, symbol: type === "stock" ? symbol.toUpperCase() : symbol };
+  }
+
+  // What to download for the assets that follow prices (each address once).
+  function priceRequests(assets) {
+    const coins = new Set(), stocks = new Set();
+    let gold = false;
+    for (const a of assets || []) {
+      if (!a.quote) continue;
+      if (a.quote.type === "gold") gold = true;
+      if (a.quote.type === "crypto") coins.add(coinId(a.quote.symbol));
+      if (a.quote.type === "stock") stocks.add(a.quote.symbol);
+    }
+    if (gold) coins.add("tether-gold"); // a token backed by one troy ounce of gold
+    const out = [];
+    if (coins.size) out.push({ key: "coins", url: `https://api.coingecko.com/api/v3/simple/price?ids=${[...coins].sort().map(encodeURIComponent).join(",")}&vs_currencies=usd,eur` });
+    for (const s of [...stocks].sort()) out.push({ key: `stock:${s}`, url: `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?range=1d&interval=1d` });
+    return out;
+  }
+  const RATES_URL = "https://open.er-api.com/v6/latest/MAD";
+
+  // open.er-api.com: { result: "success", rates: { EUR: 0.092, USD: 0.1 } } per 1 MAD -> MAD per EUR and USD.
+  function ratesFromApi(json) {
+    if (!json || json.result !== "success" || !json.rates) return null;
+    const out = {};
+    for (const c of ["EUR", "USD"]) { const r = Number(json.rates[c]); if (!(r > 0)) return null; out[c] = Math.round((1 / r) * 10000) / 10000; }
+    return out;
+  }
+
+  // Yahoo Finance chart: price and its currency.
+  function stockFromApi(json) {
+    const m = json && json.chart && Array.isArray(json.chart.result) && json.chart.result[0] && json.chart.result[0].meta;
+    if (!m) return null;
+    const price = Number(m.regularMarketPrice);
+    if (!(price > 0)) return null;
+    // London prices come in pence.
+    if (m.currency === "GBp") return { price: price / 100, currency: "GBP" };
+    return { price, currency: String(m.currency || "USD").toUpperCase() };
+  }
+
+  // A unit price in USD, EUR or MAD -> value of the quantity, in cents of the asset's currency.
+  function quoteValue(quote, unit, assetCurrency, rates) {
+    if (!quote || !unit || !(unit.price > 0)) return null;
+    let units = quote.qty;
+    if (quote.type === "gold") units = (quote.qty / TROY_OUNCE_GRAMS) * (quote.karat / 24);
+    const cents = Math.round(units * unit.price * 100);
+    if (!CURRENCIES.includes(unit.currency)) return null;
+    return convert(cents, unit.currency, assetCurrency, rates);
+  }
+
+  // The unit price for one asset from the downloaded answers ({ coins, "stock:AAPL" }).
+  function unitPrice(quote, answers) {
+    if (!quote || !answers) return null;
+    if (quote.type === "stock") return answers[`stock:${quote.symbol}`] || null;
+    const id = quote.type === "gold" ? "tether-gold" : coinId(quote.symbol);
+    const c = answers.coins && answers.coins[id];
+    if (!c) return null;
+    if (Number(c.usd) > 0) return { price: Number(c.usd), currency: "USD" };
+    if (Number(c.eur) > 0) return { price: Number(c.eur), currency: "EUR" };
+    return null;
+  }
+
+  // Writes today's value on every asset that follows a price. Returns the names updated and the ones that failed.
+  function applyPrices(state, answers, today) {
+    const updated = [], failed = [];
+    state.assets = state.assets.map((a) => {
+      if (!a.quote) return a;
+      const v = quoteValue(a.quote, unitPrice(a.quote, answers), a.currency, state.settings.rates);
+      if (v == null) { failed.push(a.name); return a; }
+      updated.push(a.name);
+      return setAssetValue(a, today, v);
+    });
+    return { updated, failed };
+  }
+
+  /* ---------- reminders ---------- */
+  // Repeating expenses due from today to "days" ahead, soonest first.
+  function upcomingBills(state, today, days) {
+    const end = addDays(today, days);
+    const out = [];
+    for (const r of state.recurring || []) {
+      if (r.type !== "expense" || r.paused) continue;
+      const acc = state.accounts.find((a) => a.id === r.account);
+      if (!acc) continue;
+      // Dates after the last one already added (so today's, once added, is not listed again).
+      for (const date of dueDates({ ...r, last: r.last && r.last >= today ? r.last : addDays(today, -1) }, end)) out.push({ rule: r.id, date, amount: r.amount, currency: acc.currency, category: r.category, note: r.note || "" });
+    }
+    return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }
+
+  // Phone notifications for bills in the next 60 days, "before" days ahead at "hour" o'clock, at most 50.
+  function billNotifications(state, today, before, hour) {
+    const cat = (id) => (state.categories.find((c) => c.id === id) || { name: id }).name;
+    const out = [];
+    for (const b of upcomingBills(state, today, 60)) {
+      const day = addDays(b.date, -(before || 0));
+      if (day < today) continue;
+      const when = before === 0 ? "today" : before === 1 ? "tomorrow" : `in ${before} days`;
+      const label = b.note || cat(b.category);
+      out.push({ id: notificationId(`${b.rule}|${b.date}`), at: `${day}T${pad(hour == null ? 9 : hour)}:00:00`,
+        title: `${label} is due ${when}`, body: `${formatMoney(b.amount, b.currency)} on ${b.date}` });
+    }
+    return out.slice(0, 50);
+  }
+
+  // A stable positive 31-bit number for a notification, so rescheduling replaces rather than duplicates.
+  function notificationId(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0) % 2000000000 + 1000;
+  }
+
+  // When an expense pushes its category past 80% or 100% of the month's budget, says which.
+  function budgetCrossing(before, after, category) {
+    const b = (list) => list.find((x) => x.category === category);
+    const x = b(after); if (!x) return null;
+    const was = b(before) ? b(before).pct : 0;
+    if (was < 100 && x.pct >= 100) return { level: "over", ...x };
+    if (was < 80 && x.pct >= 80) return { level: "warn", ...x };
+    return null;
+  }
+
+  /* ---------- monthly report ---------- */
+  function monthReport(state, ym, today) {
+    const { main, rates } = state.settings;
+    const first = `${ym}-01`;
+    const { end } = periodRange("month", first);
+    const asOf = today && today < end ? today : end;
+    const list = inPeriod(state.entries, "month", first);
+    const t = totalIn(list, main, rates);
+    const prev = totalIn(inPeriod(state.entries, "month", shiftPeriod("month", first, -1)), main, rates);
+    const nwStart = netWorth(state, addDays(first, -1)).total;
+    const nwEnd = netWorth(state, asOf).total;
+    const bal = accountBalances(state, asOf);
+    return {
+      month: ym, from: first, to: asOf, complete: asOf === end,
+      income: t.income, expense: t.expense, net: t.balance,
+      savingsRate: t.income > 0 ? Math.round((t.balance / t.income) * 1000) / 10 : null,
+      prevExpense: prev.expense, expenseChange: prev.expense > 0 ? Math.round(((t.expense - prev.expense) / prev.expense) * 1000) / 10 : null,
+      topSpend: byCategory(list, "expense", main, rates).slice(0, 6),
+      topIncome: byCategory(list, "income", main, rates).slice(0, 4),
+      budgets: budgetStatus(state, first),
+      nwStart, nwEnd, nwChange: nwEnd - nwStart,
+      accounts: state.accounts.map((a) => ({ name: a.name, currency: a.currency, balance: bal[a.id] })),
+      hustles: (state.hustles || []).map((h) => ({ name: h.name, profit: totalIn(list.filter((e) => e.hustle === h.id), main, rates).balance })),
+      goals: (state.goals || []).map((g) => ({ name: g.name, ...goalStatus(state, g, asOf), currency: g.currency, target: g.target })),
+      count: list.length,
+    };
+  }
+
+  /* ---------- quick entry links ---------- */
+  // asef://add?type=expense from the widget, shortcuts and quick actions.
+  function parseAppLink(url) {
+    const m = /^asef:\/\/add\/?(?:\?(.*))?$/i.exec(String(url || ""));
+    if (!m) return null;
+    const type = /(?:^|&)type=(income|expense|transfer)(?:&|$)/.exec(m[1] || "");
+    return { action: "add", type: type ? type[1] : "expense" };
   }
 
   /* ---------- app lock ---------- */
@@ -694,6 +876,8 @@
     addCategory, emptyState, loadState, newId, toCsv,
     ACCOUNT_KINDS, DEFAULT_ACCOUNTS, validateTransfer, accountBalances, balancesByCurrency, totalBalance, addAccount, accountInUse,
     budgetStatus, dueDates, runRecurring, validateRecurring, monthlySeries, toBackup, parseBackup,
+    RATES_URL, coinId, cleanQuote, priceRequests, ratesFromApi, stockFromApi, quoteValue, unitPrice, applyPrices,
+    upcomingBills, billNotifications, notificationId, budgetCrossing, monthReport, parseAppLink,
     validPin, hashPin, makeLock, checkPin, lockoutSeconds, addSnapshot, hasSnapshot, withoutLock, restoreKeepingLock,
     addHustle, hustleStats, addGoal, goalSaved, goalStatus,
     ASSET_KINDS, addAsset, setAssetValue, assetValueAt, assetFlows, assetStats, netWorth, netWorthSeries, allocation,

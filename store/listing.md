@@ -50,8 +50,8 @@ Everyone / 4+ (no user-generated content shared, no ads, no purchases)
 
 ## Data safety (Google Play) / App Privacy (App Store)
 - Data collected: none
-- Data shared: none
-- Data is not encrypted in transit because it is never transmitted
+- Data shared: none (live price lookups send only public coin or stock symbols, over HTTPS, and can be turned off)
+- Data in transit: encrypted (HTTPS); user data itself is never transmitted
 - Users can delete data by uninstalling the app
 
 ## Privacy policy URL

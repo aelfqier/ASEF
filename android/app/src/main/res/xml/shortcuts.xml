@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="add_expense"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_expense"
+        android:shortcutLongLabel="@string/shortcut_expense">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="asef://add?type=expense"
+            android:targetPackage="io.github.aelfqier.asef"
+            android:targetClass="io.github.aelfqier.asef.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="add_income"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_income"
+        android:shortcutLongLabel="@string/shortcut_income">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="asef://add?type=income"
+            android:targetPackage="io.github.aelfqier.asef"
+            android:targetClass="io.github.aelfqier.asef.MainActivity" />
+    </shortcut>
+</shortcuts>

@@ -11,9 +11,14 @@
   const ASSET_KIND = { property: "Property", land: "Land", gold: "Gold", stocks: "Stocks", crypto: "Crypto", savings: "Savings", vehicle: "Vehicle", business: "Business", other: "Other", debt: "Debt" };
 
   let state = L.emptyState();
-  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false, hustle: null, item: null };
+  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false, hustle: null, item: null, reportMonth: null, pendingLink: null };
 
-  const save = () => S.write(state);
+  let remindTimer = null;
+  const save = () => {
+    clearTimeout(remindTimer);
+    remindTimer = setTimeout(() => scheduleReminders(false), 1500);
+    return S.write(state);
+  };
   const cat = (id) => state.categories.find((c) => c.id === id) || { name: id, type: "expense" };
   const acc = (id) => state.accounts.find((a) => a.id === id) || { name: "?", currency: "MAD" };
   const assetById = (id) => state.assets.find((a) => a.id === id);
@@ -91,6 +96,10 @@
     $("heroBalance").classList.toggle("long", $("heroBalance").textContent.length > 13);
     const all = L.totalIn(state.entries, main, rates);
     $("heroSub").textContent = state.entries.length ? `${money(all.income)} in · ${money(all.expense)} out, all time` : "Add your first income or expense with +";
+    renderUpcoming();
+    const rb = reportBannerText();
+    $("reportBanner").hidden = !rb;
+    if (rb) $("reportBanner").textContent = rb;
     const bt = backupBannerText();
     $("backupBanner").hidden = !bt;
     if (bt) $("backupBannerText").textContent = bt;
@@ -181,6 +190,9 @@
     $("nwCash").textContent = money(nw.cash);
     $("nwAssets").textContent = money(nw.assets);
     $("nwDebts").textContent = nw.debts ? "−" + money(nw.debts) : money(0);
+    const follows = state.assets.filter((a) => a.quote).length;
+    $("priceLine").hidden = !follows && !state.settings.liveRates;
+    $("priceText").textContent = `Prices ${timeAgo(state.settings.pricesAt)}`;
     const series = L.netWorthSeries(state, 12, t);
     // Compare with the first month that has anything recorded, so an empty past doesn't look like growth.
     const dates = [...state.entries.map((e) => e.date), ...state.assets.map((a) => a.values[0].date)].sort();
@@ -279,6 +291,8 @@
       $("aKind").disabled = !!debt;
       $("aValueLabel").textContent = debt ? "Amount you owe" : "Value today";
       $("aCostBox").hidden = !!debt;
+      $("aQty").value = ""; $("aSym").value = ""; $("aKarat").value = "24";
+      quoteFields(debt ? "debt" : $("aKind").value);
       $("aCur").value = state.settings.main;
       for (const f of ["aName", "aValue", "aCost"]) $(f).value = "";
       $("aDate").value = L.today();
@@ -294,7 +308,7 @@
     $("aTitle").textContent = `${a.name}`;
     const stats = $("aStats"); stats.replaceChildren();
     const stat = (label, value, sub) => { const d = el("div", "stat"); d.append(el("span", null, label), el("strong", null, value)); if (sub) d.append(el("em", null, sub)); stats.append(d); };
-    stat(debt ? "You owe" : "Value", m(st.value), `${ASSET_KIND[a.kind]} · updated ${dayLabel(st.updated)}`);
+    stat(debt ? "You owe" : "Value", m(st.value), a.quote ? `${quoteText(a.quote)} · live price, ${dayLabel(st.updated)}` : `${ASSET_KIND[a.kind]} · updated ${dayLabel(st.updated)}`);
     if (debt) {
       const firstV = a.values[0].value;
       stat("Paid off", m(Math.max(0, firstV - st.value)), `of ${m(firstV)}`);
@@ -303,7 +317,12 @@
       stat("Income, last 12 months", m(st.year.net, { sign: true }), st.year.expense ? `${m(st.year.income)} in · ${m(st.year.expense)} costs` : "Link rent or dividends when you add them");
       stat("Yield", st.yieldPct != null ? `${st.yieldPct}%` : "—", "Yearly income ÷ value");
     }
-    $("vValue").value = ""; $("vValue").placeholder = debt ? "Still owed" : "New value";
+    $("qtyForm").hidden = !a.quote;
+    if (a.quote) {
+      $("qQty").value = String(a.quote.qty);
+      $("qUnit").textContent = a.quote.type === "gold" ? `grams, ${a.quote.karat}k` : a.quote.type === "crypto" ? a.quote.symbol.toUpperCase() : `${a.quote.symbol} shares`;
+    }
+    $("vValue").value = ""; $("vValue").placeholder = debt ? "Still owed" : a.quote ? "Or type a value" : "New value";
     $("vDate").value = t;
     const h = $("aHistory"); h.replaceChildren();
     const vals = a.values.slice().reverse();
@@ -325,10 +344,16 @@
   function saveNewAsset(ev) {
     ev.preventDefault();
     const costRaw = $("aCost").value.trim();
+    const kindNow = ui.newDebt ? "debt" : $("aKind").value;
+    const qtyRaw = $("aQty").value.trim().replace(",", ".");
+    const quote = !$("aQuoteBox").hidden && qtyRaw ? { qty: Number(qtyRaw), symbol: $("aSym").value.trim(), karat: Number($("aKarat").value) } : undefined;
+    if (quote && !L.cleanQuote(quote, kindNow)) { $("aErr").textContent = kindNow === "gold" ? "Enter the grams." : "Enter the quantity and the symbol."; $("aErr").hidden = false; return; }
+    if (quote && !$("aValue").value.trim()) $("aValue").value = "0";
     const input = {
       name: $("aName").value, kind: ui.newDebt ? "debt" : $("aKind").value, currency: $("aCur").value,
       value: $("aValue").value.trim() === "0" ? 0 : L.parseAmount($("aValue").value), date: $("aDate").value,
       cost: costRaw && !ui.newDebt ? L.parseAmount(costRaw) : undefined,
+      quote,
     };
     const r = L.addAsset(state.assets, input);
     const msg = { name: "Type a name.", value: "Enter the value.", date: "Pick a date.", cost: "What you paid isn't a number.", exists: "You already have one with that name." };
@@ -336,6 +361,7 @@
     state.assets = r.assets; save();
     $("assetSheet").close(); render();
     toast(`${input.name.trim()} added`);
+    if (quote) refreshPrices(true);
   }
 
   function updateValue(ev) {
@@ -517,6 +543,7 @@
   }
 
   function renderPlan() {
+    renderReport();
     renderChart();
     const t = L.today(), d = L.parseDate(t);
     $("budgetMonth").textContent = `${MONTHS[d.getMonth()]}, in ${state.settings.main}`;
@@ -569,6 +596,13 @@
     $("bioSwitch").setAttribute("aria-checked", String(!!(lock && lock.bio)));
     $("lockAfter").value = String(state.settings.lockAfter || 0);
     renderBackupSettings();
+    $("ratesSwitch").setAttribute("aria-checked", String(!!state.settings.liveRates));
+    $("ratesNote").textContent = state.settings.liveRates ? `From the internet, a few times a day. Last: ${timeAgo(state.settings.pricesAt)}.` : "Off: type the rates yourself.";
+    $("billSwitch").setAttribute("aria-checked", String(!!state.settings.billReminders));
+    $("budgetSwitch").setAttribute("aria-checked", String(!!state.settings.budgetAlerts));
+    $("remindBefore").value = String(state.settings.remindBefore);
+    $("beforeRow").hidden = !state.settings.billReminders;
+    $("remindNote").textContent = S.canNotify ? "Notifications on this phone." : "Bill notifications work in the ASEF app on your phone. Here, bills due soon show on Home.";
     const bal = L.accountBalances(state);
     const al = $("accList"); al.replaceChildren();
     for (const a of state.accounts) {
@@ -741,8 +775,16 @@
     $("amountErr").hidden = !errs.includes("amount");
     $("catErr").hidden = !errs.includes("category");
     if (errs.length) return;
+    const budgetsBefore = L.budgetStatus(state, draft.date);
     if (editing) state.entries = state.entries.map((e) => (e.id === draft.id ? draft : e)); else state.entries.push(draft);
     ui.lastType = draft.type; ui.lastAccount = draft.account;
+    const sameMonth = draft.date.slice(0, 7) === L.today().slice(0, 7);
+    const cross = draft.type === "expense" && sameMonth && state.settings.budgetAlerts ? L.budgetCrossing(budgetsBefore, L.budgetStatus(state, draft.date), draft.category) : null;
+    if (cross) {
+      save(); $("sheet").close(); render();
+      toast(cross.level === "over" ? `${cat(cross.category).name} is over budget by ${money(-cross.left)} this month` : `${cat(cross.category).name}: ${cross.pct}% of this month's budget used, ${money(cross.left)} left`);
+      return;
+    }
     finish(editing ? "Entry updated" : `${draft.type === "income" ? "Income" : "Expense"} added: ${L.formatMoney(draft.amount, draft.currency)}`);
   }
 
@@ -781,6 +823,7 @@
     pad.mode = null; pad.pin = ""; pad.first = null;
     $("lockScreen").hidden = true;
     document.body.classList.remove("locked");
+    if (ui.pendingLink) { const l = ui.pendingLink; ui.pendingLink = null; setTimeout(() => openSheet(null, l.type), 50); }
   }
 
   function drawDots() {
@@ -947,6 +990,195 @@
     $("lastBackupNote").textContent = state.settings.lastBackup ? `Last backup file: ${dayLabel(state.settings.lastBackup)}.` : "Once a week, on the Home screen. No backup file saved yet.";
   }
 
+  /* ---------- live prices ---------- */
+  const PRICE_EVERY = 6 * 3600 * 1000;
+  let refreshing = false;
+
+  // Downloads exchange rates and market prices, then writes today's value on assets that follow a price.
+  async function refreshPrices(force) {
+    if (refreshing) return;
+    const st = state.settings;
+    const wantRates = st.liveRates;
+    const reqs = L.priceRequests(state.assets);
+    if (!wantRates && !reqs.length) { if (force) toast("Nothing follows a live price yet"); return; }
+    if (!force && st.pricesAt && Date.now() - st.pricesAt < PRICE_EVERY) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) { if (force) toast("You're offline. Prices update when you're back online."); return; }
+    refreshing = true;
+    let ratesOk = !wantRates, errors = 0;
+    try {
+      if (wantRates) {
+        try { const r = L.ratesFromApi(await S.fetchJson(L.RATES_URL)); if (r) { st.rates = { ...st.rates, ...r }; ratesOk = true; } else errors++; }
+        catch (_) { errors++; }
+      }
+      const answers = {};
+      for (const q of reqs) {
+        try {
+          const json = await S.fetchJson(q.url);
+          answers[q.key] = q.key === "coins" ? json : L.stockFromApi(json);
+        } catch (_) { errors++; }
+      }
+      const res = reqs.length ? L.applyPrices(state, answers, L.today()) : { updated: [], failed: [] };
+      if (ratesOk || res.updated.length) st.pricesAt = Date.now();
+      save(); render();
+      if ($("assetSheet").open && ui.viewing) renderAssetView();
+      if (force || res.failed.length) {
+        const bits = [];
+        if (wantRates) bits.push(ratesOk ? "rates updated" : "rates not available");
+        if (res.updated.length) bits.push(`${res.updated.length} asset${res.updated.length === 1 ? "" : "s"} updated`);
+        if (res.failed.length) bits.push(`no price for ${res.failed.join(", ")}`);
+        toast(bits.join(" · ") || (errors ? "Prices not available right now" : "Up to date"));
+      }
+    } finally { refreshing = false; }
+  }
+
+  function timeAgo(ms) {
+    if (!ms) return "never";
+    const m = Math.round((Date.now() - ms) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60);
+    return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+  }
+
+  const QUOTE_KINDS = ["gold", "crypto", "stocks"];
+  function quoteFields(kind) {
+    const on = QUOTE_KINDS.includes(kind) && !ui.newDebt;
+    $("aQuoteBox").hidden = !on;
+    if (!on) return;
+    $("aQtyLabel").textContent = kind === "gold" ? "Grams" : kind === "crypto" ? "Coins" : "Shares";
+    $("aSymBox").hidden = kind === "gold";
+    $("aKaratBox").hidden = kind !== "gold";
+    $("aSymLabel").textContent = kind === "crypto" ? "Coin (BTC, ETH…)" : "Ticker (AAPL, TSLA…)";
+    $("aSym").placeholder = kind === "crypto" ? "BTC" : "AAPL";
+  }
+  const quoteText = (q) => q.type === "gold" ? `${q.qty} g of ${q.karat}k gold` : q.type === "crypto" ? `${q.qty} ${q.symbol.toUpperCase()}` : `${q.qty} ${q.symbol} shares`;
+
+  /* ---------- reminders ---------- */
+  async function scheduleReminders(ask) {
+    if (!S.canNotify) return;
+    const st = state.settings;
+    const items = st.billReminders ? L.billNotifications(state, L.today(), st.remindBefore, 9) : [];
+    const res = await S.scheduleReminders(items, ask);
+    if (ask && res === "denied") toast("Notifications are off for ASEF in your phone's settings");
+  }
+
+  function renderUpcoming() {
+    const bills = L.upcomingBills(state, L.today(), 7);
+    $("upcomingCard").hidden = !bills.length;
+    const box = $("upcomingList"); box.replaceChildren();
+    for (const b of bills.slice(0, 5)) {
+      const row = el("div", "row static expense");
+      const mid = el("span", "row-mid");
+      mid.append(el("span", "row-title", b.note || cat(b.category).name), el("span", "row-note", b.date === L.today() ? "Today" : dayLabel(b.date)));
+      row.append(el("span", "dot", "↻"), mid, el("span", "row-amt", L.formatMoney(-b.amount, b.currency)));
+      box.append(row);
+    }
+  }
+
+  /* ---------- monthly report ---------- */
+  const ymOf = (iso) => iso.slice(0, 7);
+  function shiftYm(ym, step) { return L.shiftPeriod("month", `${ym}-01`, step).slice(0, 7); }
+
+  function renderReport() {
+    const today = L.today();
+    if (!ui.reportMonth) ui.reportMonth = L.parseDate(today).getDate() <= 7 ? shiftYm(ymOf(today), -1) : ymOf(today);
+    const r = L.monthReport(state, ui.reportMonth, today);
+    $("repMonth").textContent = `${monthName(r.month)}${r.complete ? "" : " (so far)"}`;
+    $("repNext").disabled = r.month >= ymOf(today);
+    stats($("repStats"), [
+      ["Income", money(r.income)],
+      ["Spent", money(r.expense), r.expenseChange != null ? `${r.expenseChange > 0 ? "+" : ""}${r.expenseChange}% vs month before` : ""],
+      ["Saved", money(r.net, null, { sign: true }), r.savingsRate != null ? `${r.savingsRate}% of income` : ""],
+      ["Net worth", money(r.nwChange, null, { sign: true }), `now ${money(r.nwEnd)}`],
+    ]);
+    const box = $("repLines"); box.replaceChildren();
+    const section = (title, rows) => {
+      if (!rows.length) return;
+      box.append(el("h3", null, title));
+      for (const [a, b, cls] of rows) { const d = el("div", "rep-line"); d.append(el("span", null, a), el("strong", cls || null, b)); box.append(d); }
+    };
+    section("Where it went", r.topSpend.map((x) => [cat(x.category).name, money(x.amount)]));
+    section("Budgets", r.budgets.map((b) => [cat(b.category).name, `${b.pct}% of ${money(b.budget)}`, b.pct > 100 ? "neg" : ""]));
+    section("Side hustles", r.hustles.map((h) => [h.name, money(h.profit, null, { sign: true })]));
+    section("Goals", r.goals.map((g) => [g.name, g.done ? "Reached" : `${g.pct}%`]));
+    if (!r.count) box.append(el("p", "empty", "Nothing recorded this month."));
+  }
+
+  // A one-page A4 PDF of the month, drawn with jsPDF. Plain ASCII text: the built-in PDF fonts lack some symbols.
+  function exportReportPdf() {
+    const J = window.jspdf && window.jspdf.jsPDF;
+    if (!J) { toast("The PDF maker didn't load"); return; }
+    const r = L.monthReport(state, ui.reportMonth, L.today());
+    const main = state.settings.main;
+    const pm = (c, cur, sign) => {
+      const t = L.formatMoney(c, cur || main, { sign }).replace("−", "-").replace("€", "EUR ").replace("$", "USD ");
+      return t.replace(/\u202f|\u00a0/g, " ");
+    };
+    const doc = new J({ unit: "mm", format: "a4" });
+    const W = 210, M = 18;
+    let y = 0;
+    doc.setFillColor(138, 3, 3); doc.rect(0, 0, W, 34, "F");
+    doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(22);
+    doc.text("ASEF", M, 16);
+    doc.setFontSize(13); doc.setFont("helvetica", "normal");
+    doc.text(`Monthly report - ${monthName(r.month)}${r.complete ? "" : " (so far)"}`, M, 26);
+    doc.setFontSize(9); doc.text(`Made ${L.today()} - amounts in ${main}`, W - M, 26, { align: "right" });
+    y = 46;
+    // Four key numbers
+    const boxes = [["Income", pm(r.income)], ["Spent", pm(r.expense)], ["Saved", pm(r.net, null, true)], ["Net worth change", pm(r.nwChange, null, true)]];
+    const bw = (W - 2 * M - 9) / 4;
+    boxes.forEach(([label, value], i) => {
+      const x = M + i * (bw + 3);
+      doc.setFillColor(245, 240, 240); doc.roundedRect(x, y, bw, 22, 2, 2, "F");
+      doc.setTextColor(110, 110, 110); doc.setFontSize(8.5); doc.text(label, x + 3, y + 7);
+      doc.setTextColor(20, 20, 20); doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.text(value, x + 3, y + 16, { maxWidth: bw - 5 });
+      doc.setFont("helvetica", "normal");
+    });
+    y += 30;
+    doc.setFontSize(10); doc.setTextColor(60, 60, 60);
+    const notes = [];
+    if (r.savingsRate != null) notes.push(`You kept ${r.savingsRate}% of your income.`);
+    if (r.expenseChange != null) notes.push(`Spending was ${Math.abs(r.expenseChange)}% ${r.expenseChange >= 0 ? "higher" : "lower"} than the month before.`);
+    notes.push(`Net worth: ${pm(r.nwStart)} at the start, ${pm(r.nwEnd)} at the end.`);
+    doc.text(notes.join(" "), M, y, { maxWidth: W - 2 * M }); y += 14;
+
+    const heading = (t) => { if (y > 260) { doc.addPage(); y = 20; } doc.setTextColor(138, 3, 3); doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text(t, M, y); doc.setFont("helvetica", "normal"); y += 7; };
+    const line = (a, b, bar) => {
+      if (y > 280) { doc.addPage(); y = 20; }
+      doc.setTextColor(30, 30, 30); doc.setFontSize(10); doc.text(String(a), M, y);
+      doc.text(String(b), W - M, y, { align: "right" });
+      if (bar != null) { doc.setFillColor(235, 235, 235); doc.rect(M + 45, y - 3, 40, 3, "F"); doc.setFillColor(193, 18, 31); doc.rect(M + 45, y - 3, Math.max(1, Math.min(40, bar * 40)), 3, "F"); }
+      y += 6.5;
+    };
+    if (r.topSpend.length) { heading("Where the money went"); const max = r.topSpend[0].amount || 1; for (const x of r.topSpend) line(cat(x.category).name, pm(x.amount), x.amount / max); y += 3; }
+    if (r.topIncome.length) { heading("Where it came from"); for (const x of r.topIncome) line(cat(x.category).name, pm(x.amount)); y += 3; }
+    if (r.budgets.length) { heading("Budgets"); for (const b of r.budgets) line(cat(b.category).name, `${pm(b.spent)} of ${pm(b.budget)} (${b.pct}%)`, Math.min(1, b.pct / 100)); y += 3; }
+    heading("Accounts at the end of the month"); for (const a of r.accounts) line(a.name, pm(a.balance, a.currency)); y += 3;
+    if (r.hustles.length) { heading("Side hustles"); for (const h of r.hustles) line(h.name, pm(h.profit, null, true)); y += 3; }
+    if (r.goals.length) { heading("Savings goals"); for (const g of r.goals) line(g.name, g.done ? "Reached" : `${pm(g.saved, g.currency)} of ${pm(g.target, g.currency)} (${g.pct}%)`, g.pct / 100); }
+    doc.setFontSize(8); doc.setTextColor(150, 150, 150);
+    doc.text("Made with ASEF. Your data stays on your phone.", M, 290);
+    const b64 = doc.output("datauristring").split(",")[1];
+    pad.leaving = Date.now();
+    S.saveBase64(`asef-report-${r.month}.pdf`, b64, "application/pdf").catch(() => toast("The PDF couldn't be saved"));
+  }
+
+  function reportBannerText() {
+    const t = L.today(), d = L.parseDate(t).getDate();
+    if (d > 5) return null;
+    const prev = shiftYm(ymOf(t), -1);
+    if (!L.inPeriod(state.entries, "month", `${prev}-01`).length) return null;
+    return `Your ${monthName(prev).split(" ")[0]} report is ready ›`;
+  }
+
+  /* ---------- quick entry links ---------- */
+  function handleLink(url) {
+    const link = L.parseAppLink(url);
+    if (!link) return;
+    if (pad.mode === "unlock") { ui.pendingLink = link; return; } // after the PIN
+    openSheet(null, link.type);
+  }
+
   /* ---------- toast ---------- */
   let toastTimer = null, undoFn = null;
   function toast(text, undo) {
@@ -979,6 +1211,26 @@
 
     // Wealth
     wireItems();
+    $("refreshPrices").addEventListener("click", () => refreshPrices(true));
+    $("aKind").addEventListener("change", () => quoteFields($("aKind").value));
+    $("qtyForm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const a = assetById(ui.viewing); if (!a || !a.quote) return;
+      const q = L.cleanQuote({ ...a.quote, qty: Number($("qQty").value.trim().replace(",", ".")) }, a.kind);
+      if (!q) { toast("Enter a quantity above zero"); return; }
+      state.assets = state.assets.map((x) => (x.id === a.id ? { ...x, quote: q } : x)); save();
+      renderAssetView(); refreshPrices(true);
+    });
+    // Report
+    $("repPrev").addEventListener("click", () => { ui.reportMonth = shiftYm(ui.reportMonth, -1); renderReport(); });
+    $("repNext").addEventListener("click", () => { ui.reportMonth = shiftYm(ui.reportMonth, 1); renderReport(); });
+    $("exportPdf").addEventListener("click", exportReportPdf);
+    $("reportBanner").addEventListener("click", () => { ui.reportMonth = shiftYm(ymOf(L.today()), -1); });
+    // Settings: rates and reminders
+    $("ratesSwitch").addEventListener("click", () => { state.settings.liveRates = !state.settings.liveRates; save(); renderSettings(); if (state.settings.liveRates) refreshPrices(true); });
+    $("billSwitch").addEventListener("click", () => { state.settings.billReminders = !state.settings.billReminders; save(); renderSettings(); scheduleReminders(state.settings.billReminders); });
+    $("budgetSwitch").addEventListener("click", () => { state.settings.budgetAlerts = !state.settings.budgetAlerts; save(); renderSettings(); });
+    $("remindBefore").addEventListener("change", (ev) => { state.settings.remindBefore = Number(ev.target.value); save(); scheduleReminders(true); });
     $("addAssetBtn").addEventListener("click", () => openAsset(null, false));
     $("addDebtBtn").addEventListener("click", () => openAsset(null, true));
     $("closeAsset").addEventListener("click", () => $("assetSheet").close());
@@ -1013,6 +1265,7 @@
       $("recAmt").value = ""; $("recNote").value = "";
       save(); renderPlan();
       toast(added ? `Repeating entry added, ${added} already due` : "Repeating entry added");
+      if (rule.type === "expense" && state.settings.billReminders) scheduleReminders(true);
     });
 
     // Settings
@@ -1067,6 +1320,12 @@
     save();
     render();
     if (added) toast(`${added} repeating ${added === 1 ? "entry" : "entries"} added`);
+    S.onAppLink(handleLink);
+    refreshPrices(false);
+    // Ask for notification permission the first time there is a bill to remind about.
+    scheduleReminders(state.settings.billReminders && state.recurring.some((r) => r.type === "expense"));
+    // Prices again when coming back to the app after a while.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPrices(false); });
   }
   start();
 })();

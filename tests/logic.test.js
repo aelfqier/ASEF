@@ -409,3 +409,116 @@ test("backup reminder setting defaults to on and remembers the last backup", () 
   assert.equal(L.loadState({ settings: { lastBackup: "2026-11-01" } }).settings.lastBackup, "2026-11-01");
   assert.equal("lastBackup" in L.loadState({ settings: { lastBackup: "bad" } }).settings, false);
 });
+
+/* ---------- live prices ---------- */
+test("exchange rates from the rates service", () => {
+  assert.deepEqual(L.ratesFromApi({ result: "success", rates: { MAD: 1, EUR: 0.0926, USD: 0.1 } }), { EUR: 10.7991, USD: 10 });
+  assert.equal(L.ratesFromApi({ result: "error" }), null);
+  assert.equal(L.ratesFromApi({ result: "success", rates: { EUR: 0 } }), null);
+});
+
+test("quotes are cleaned per kind", () => {
+  assert.deepEqual(L.cleanQuote({ qty: "50", karat: 18 }, "gold"), { type: "gold", qty: 50, karat: 18 });
+  assert.deepEqual(L.cleanQuote({ qty: 0.5, symbol: "BTC" }, "crypto"), { type: "crypto", qty: 0.5, symbol: "BTC" });
+  assert.deepEqual(L.cleanQuote({ qty: 10, symbol: "aapl" }, "stocks"), { type: "stock", qty: 10, symbol: "AAPL" });
+  assert.equal(L.cleanQuote({ qty: 10, symbol: "AAPL" }, "property"), null);
+  assert.equal(L.cleanQuote({ qty: 0, symbol: "BTC" }, "crypto"), null);
+  assert.equal(L.cleanQuote({ qty: 1, symbol: "<script>" }, "crypto"), null);
+});
+
+test("price requests: one for all coins and gold, one per stock", () => {
+  const assets = [
+    { quote: { type: "crypto", qty: 1, symbol: "BTC" } }, { quote: { type: "crypto", qty: 1, symbol: "eth" } },
+    { quote: { type: "gold", qty: 10, karat: 24 } }, { quote: { type: "stock", qty: 1, symbol: "AAPL" } }, { quote: { type: "stock", qty: 2, symbol: "AAPL" } }, {},
+  ];
+  assert.deepEqual(L.priceRequests(assets).map((r) => r.url), [
+    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether-gold&vs_currencies=usd,eur",
+    "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1d",
+  ]);
+  assert.deepEqual(L.priceRequests([]), []);
+});
+
+test("asset values from live prices", () => {
+  const rates = { MAD: 1, EUR: 10, USD: 9 };
+  // 31.1034768 g of 24k gold at 2 000 USD an ounce = 2 000 USD = 18 000 MAD
+  assert.equal(L.quoteValue({ type: "gold", qty: 31.1034768, karat: 24 }, { price: 2000, currency: "USD" }, "MAD", rates), 1800000);
+  assert.equal(L.quoteValue({ type: "gold", qty: 31.1034768, karat: 18 }, { price: 2000, currency: "USD" }, "MAD", rates), 1350000);
+  assert.equal(L.quoteValue({ type: "crypto", qty: 0.5, symbol: "BTC" }, { price: 60000, currency: "USD" }, "USD", rates), 3000000);
+  assert.equal(L.quoteValue({ type: "stock", qty: 3, symbol: "X" }, { price: 10, currency: "GBP" }, "MAD", rates), null);
+  assert.deepEqual(L.stockFromApi({ chart: { result: [{ meta: { regularMarketPrice: 190.5, currency: "USD" } }] } }), { price: 190.5, currency: "USD" });
+  assert.deepEqual(L.stockFromApi({ chart: { result: [{ meta: { regularMarketPrice: 250, currency: "GBp" } }] } }), { price: 2.5, currency: "GBP" });
+  assert.equal(L.stockFromApi({ chart: { result: null, error: { code: "Not Found" } } }), null);
+});
+
+test("prices are written as today's value; failures are reported", () => {
+  const s = L.emptyState();
+  s.settings.rates = { MAD: 1, EUR: 10, USD: 9 };
+  let r = L.addAsset([], { name: "BTC", kind: "crypto", currency: "MAD", value: 0, date: "2026-11-01", quote: { qty: 0.1, symbol: "BTC" } });
+  r = L.addAsset(r.assets, { name: "Apple", kind: "stocks", currency: "USD", value: 0, date: "2026-11-01", quote: { qty: 2, symbol: "AAPL" } });
+  r = L.addAsset(r.assets, { name: "Shop", kind: "stocks", currency: "MAD", value: 0, date: "2026-11-01", quote: { qty: 2, symbol: "IAM.CS" } });
+  r = L.addAsset(r.assets, { name: "Flat", kind: "property", currency: "MAD", value: 100, date: "2026-11-01" });
+  s.assets = r.assets;
+  assert.equal(L.addAsset([], { name: "Z", kind: "crypto", currency: "MAD", value: 0, date: "2026-11-01", quote: { qty: -1, symbol: "BTC" } }).error, "quote");
+  const out = L.applyPrices(s, { coins: { bitcoin: { usd: 60000, eur: 55000 } }, "stock:AAPL": { price: 200, currency: "USD" } }, "2026-11-12");
+  assert.deepEqual(out, { updated: ["BTC", "Apple"], failed: ["Shop"] });
+  assert.equal(L.assetValueAt(s.assets[0], "2026-11-12"), 5400000);
+  assert.equal(L.assetValueAt(s.assets[1], "2026-11-12"), 40000);
+  assert.equal(s.assets[3].values.length, 1);
+  assert.deepEqual(L.loadState(JSON.parse(JSON.stringify(s))).assets[0].quote, { type: "crypto", qty: 0.1, symbol: "BTC" });
+});
+
+/* ---------- reminders ---------- */
+test("upcoming bills from repeating expenses", () => {
+  const s = world();
+  s.recurring.push({ id: "rent", type: "expense", amount: 400000, account: "bank", category: "rent", freq: "monthly", day: 15, start: "2026-01-15", last: "2026-10-15", note: "Rent" });
+  s.recurring.push({ id: "pay", type: "income", amount: 900000, account: "bank", category: "salary", freq: "monthly", day: 1, start: "2026-01-01" });
+  s.recurring.push({ id: "gym", type: "expense", amount: 20000, account: "cash", category: "health", freq: "weekly", start: "2026-11-02", last: "2026-11-09" });
+  const up = L.upcomingBills(s, "2026-11-12", 7);
+  assert.deepEqual(up.map((b) => [b.rule, b.date]), [["rent", "2026-11-15"], ["gym", "2026-11-16"]]);
+  const n = L.billNotifications(s, "2026-11-12", 1, 9);
+  assert.deepEqual(n[0], { id: L.notificationId("rent|2026-11-15"), at: "2026-11-14T09:00:00", title: "Rent is due tomorrow", body: "4 000.00 MAD on 2026-11-15" });
+  assert.equal(n.filter((x) => x.title.startsWith("Rent")).length, 2); // Nov and Dec within 60 days
+  assert.ok(n.every((x) => x.at.slice(0, 10) >= "2026-11-12"));
+  assert.notEqual(L.notificationId("a"), L.notificationId("b"));
+});
+
+test("budget warnings when crossing 80% and 100%", () => {
+  const before = [{ category: "food", budget: 1000, spent: 700, left: 300, pct: 70 }];
+  assert.equal(L.budgetCrossing(before, [{ category: "food", budget: 1000, spent: 850, left: 150, pct: 85 }], "food").level, "warn");
+  assert.equal(L.budgetCrossing(before, [{ category: "food", budget: 1000, spent: 1100, left: -100, pct: 110 }], "food").level, "over");
+  assert.equal(L.budgetCrossing([{ category: "food", pct: 85 }], [{ category: "food", pct: 90 }], "food"), null);
+  assert.equal(L.budgetCrossing([], [], "food"), null);
+});
+
+/* ---------- monthly report ---------- */
+test("monthly report sums the month and compares with the one before", () => {
+  const s = world();
+  s.budgets = { food: 100000 };
+  s.hustles = L.addHustle([], { name: "Logos", start: "2026-01-01" }).hustles;
+  s.entries.push(
+    e({ account: "bank", type: "income", category: "salary", amount: 1000000, date: "2026-10-01" }),
+    e({ account: "cash", amount: 80000, date: "2026-10-05" }),
+    e({ account: "cash", category: "rent", amount: 300000, date: "2026-10-06" }),
+    e({ account: "cash", type: "income", category: "side-hustle", amount: 50000, date: "2026-10-20", hustle: "hustle-logos" }),
+    e({ account: "cash", amount: 200000, date: "2026-09-10" }),
+  );
+  const r = L.monthReport(s, "2026-10", "2026-11-12");
+  assert.equal(r.income, 1050000);
+  assert.equal(r.expense, 380000);
+  assert.equal(r.net, 670000);
+  assert.equal(r.savingsRate, 63.8);
+  assert.equal(r.expenseChange, 90);
+  assert.deepEqual(r.topSpend.map((x) => x.category), ["rent", "food"]);
+  assert.equal(r.nwChange, 670000);
+  assert.deepEqual(r.hustles, [{ name: "Logos", profit: 50000 }]);
+  assert.equal(r.budgets[0].pct, 80);
+  assert.equal(r.complete, true);
+  assert.equal(L.monthReport(s, "2026-11", "2026-11-12").complete, false);
+});
+
+test("app links open the add sheet", () => {
+  assert.deepEqual(L.parseAppLink("asef://add?type=income"), { action: "add", type: "income" });
+  assert.deepEqual(L.parseAppLink("asef://add"), { action: "add", type: "expense" });
+  assert.deepEqual(L.parseAppLink("asef://add?type=evil"), { action: "add", type: "expense" });
+  assert.equal(L.parseAppLink("https://x.com"), null);
+});

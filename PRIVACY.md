@@ -14,6 +14,17 @@ savings goals you type into the app, and your settings (main currency and exchan
 Only on your phone, in the app's own storage. ASEF has no account, no server and no sign-in. Your data is
 never sent to us or to anyone else.
 
+## Live prices
+
+If **Live prices** is on (you can turn it off in Settings), ASEF downloads public exchange rates from
+open.er-api.com, crypto and gold prices from CoinGecko and stock prices from Yahoo Finance. The only thing
+sent is the coin or stock symbol being looked up (for example BTC or AAPL), never amounts, names or any other
+data you entered. Like any web request, these services see your IP address.
+
+## Notifications
+
+Bill reminders are scheduled on your phone by ASEF itself. Nothing goes through a server.
+
 ## What ASEF does not do
 
 - No analytics, tracking or advertising.

@@ -63,6 +63,18 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
   (`res/xml/backup_rules.xml`, `res/xml/data_extraction_rules.xml`); on iPhone it is part of iCloud Backup.
 - A weekly reminder on Home to save a backup file, until one is saved.
 
+## Live prices, reminders, monthly report, quick entry
+
+- Live prices (can be turned off in Settings): exchange rates from open.er-api.com, crypto and gold from
+  CoinGecko (gold by troy ounce, scaled by karat), stocks from Yahoo. An asset with a quantity and symbol gets
+  its value updated at most every 6 hours, or on **Refresh** in Wealth. Only coin and stock symbols are sent.
+- Reminders: a phone notification before each repeating bill (same day, 1, 2 or 3 days before, at 9:00), and a
+  warning when an expense pushes a budget past 80% or 100%. The next bills also show on Home.
+- Monthly report in Plan: income, spending, saved, top categories, budgets and net worth for any month, saved
+  as a PDF (jsPDF, vendored in `www/vendor/`). Home shows a banner for last month's report in the first days.
+- Quick entry: Android home screen widget and long-press shortcuts, iPhone quick actions; they open
+  `asef://add?type=expense|income`, which goes straight to the add sheet (after unlocking).
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)

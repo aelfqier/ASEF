@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://open.er-api.com https://api.coingecko.com https://query1.finance.yahoo.com; object-src 'none'; base-uri 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0a">
 <title>ASEF</title>
@@ -34,6 +34,13 @@
     <div class="card">
       <div class="card-head"><h2>Accounts</h2><button class="link" id="transferBtn">Transfer</button></div>
       <div class="acc-row" id="accRow"></div>
+    </div>
+
+    <button class="banner report-banner" id="reportBanner" data-go="plan" hidden></button>
+
+    <div class="card" id="upcomingCard" hidden>
+      <div class="card-head"><h2>Coming up</h2><span class="muted">Next 7 days</span></div>
+      <div id="upcomingList" class="list"></div>
     </div>
 
     <div class="card" id="homeBudgets" hidden>
@@ -86,6 +93,7 @@
       <div class="hero-label">Net worth</div>
       <div class="hero-amount" id="nwTotal">0.00</div>
       <div class="hero-sub" id="nwChange"></div>
+      <div class="price-line" id="priceLine" hidden><span id="priceText"></span><button class="link" id="refreshPrices">Update prices</button></div>
       <div class="cur-row">
         <div class="cur-chip"><span>CASH</span><strong id="nwCash"></strong></div>
         <div class="cur-chip"><span>ASSETS</span><strong id="nwAssets"></strong></div>
@@ -120,6 +128,16 @@
 
   <!-- Plan -->
   <section class="view" id="view-plan" data-view="plan" hidden>
+    <div class="card" id="reportCard">
+      <div class="card-head"><h2>Monthly report</h2><button class="link" id="exportPdf">Export PDF</button></div>
+      <div class="period-nav small-nav">
+        <button class="icon-btn" id="repPrev" aria-label="Previous month">‹</button>
+        <div id="repMonth"></div>
+        <button class="icon-btn" id="repNext" aria-label="Next month">›</button>
+      </div>
+      <div class="stats" id="repStats"></div>
+      <div id="repLines" class="rep-lines"></div>
+    </div>
     <div class="card">
       <div class="card-head"><h2>Last 6 months</h2><span class="legend"><i class="lg in"></i>Income <i class="lg out"></i>Expenses</span></div>
       <div id="chart" class="chart"></div>
@@ -175,6 +193,22 @@
       </div>
     </div>
     <div class="card">
+      <h2>Reminders</h2>
+      <p class="muted" id="remindNote"></p>
+      <div class="setting">
+        <div><strong>Before repeating bills</strong><p class="muted">Rent, subscriptions and other repeating expenses</p></div>
+        <button class="switch" id="billSwitch" role="switch" aria-checked="true"><i></i></button>
+      </div>
+      <div class="setting" id="beforeRow">
+        <div><strong>When</strong></div>
+        <select id="remindBefore"><option value="0">On the day, 9:00</option><option value="1">The day before, 9:00</option><option value="3">3 days before, 9:00</option></select>
+      </div>
+      <div class="setting">
+        <div><strong>Budget warnings</strong><p class="muted">When a category passes 80% and 100% of its budget</p></div>
+        <button class="switch" id="budgetSwitch" role="switch" aria-checked="true"><i></i></button>
+      </div>
+    </div>
+    <div class="card">
       <h2>Automatic backup</h2>
       <p class="muted" id="cloudNote"></p>
       <div class="field-label">Daily copies on this phone</div>
@@ -206,6 +240,10 @@
       <p class="muted">Used only to add everything up in one total. Update them when rates move.</p>
       <label class="rate">1 EUR = <input id="rateEUR" inputmode="decimal"> MAD</label>
       <label class="rate">1 USD = <input id="rateUSD" inputmode="decimal"> MAD</label>
+      <div class="setting">
+        <div><strong>Update rates automatically</strong><p class="muted" id="ratesNote">From the internet, a few times a day.</p></div>
+        <button class="switch" id="ratesSwitch" role="switch" aria-checked="true"><i></i></button>
+      </div>
     </div>
     <div class="card">
       <h2>Categories</h2>
@@ -301,6 +339,14 @@
       <label>Currency<select id="aCur"><option>MAD</option><option>EUR</option><option>USD</option></select></label>
       <label><span id="aValueLabel">Value today</span><input id="aValue" inputmode="decimal" placeholder="0.00"></label>
       <label>On date<input type="date" id="aDate"></label>
+      <div class="span2 quote-box" id="aQuoteBox" hidden>
+        <div class="field-label">Live price <span class="muted-i">(optional: the value then updates by itself)</span></div>
+        <div class="grid2">
+          <label><span id="aQtyLabel">Quantity</span><input id="aQty" inputmode="decimal" placeholder="0"></label>
+          <label id="aSymBox"><span id="aSymLabel">Symbol</span><input id="aSym" maxlength="20" autocapitalize="characters" placeholder="BTC"></label>
+          <label id="aKaratBox">Purity<select id="aKarat"><option value="24">24 karat</option><option value="22">22 karat</option><option value="21">21 karat</option><option value="18">18 karat</option><option value="14">14 karat</option></select></label>
+        </div>
+      </div>
       <label class="span2" id="aCostBox">What you paid <span class="muted-i">(optional, to see your gain)</span><input id="aCost" inputmode="decimal" placeholder="0.00"></label>
     </div>
     <div class="err" id="aErr" hidden></div>
@@ -308,6 +354,11 @@
   </form>
   <div id="assetView" hidden>
     <div class="stats" id="aStats"></div>
+    <form id="qtyForm" class="inline-form value-form" hidden>
+      <input id="qQty" inputmode="decimal" placeholder="Quantity">
+      <span class="muted qty-unit" id="qUnit"></span>
+      <button class="btn small" type="submit">Save</button>
+    </form>
     <form id="valueForm" class="inline-form value-form">
       <input id="vValue" inputmode="decimal" placeholder="New value">
       <input type="date" id="vDate">
@@ -393,6 +444,7 @@
 
 <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastUndo">Undo</button></div>
 
+<script src="vendor/jspdf.umd.min.js"></script>
 <script src="js/logic.js"></script>
 <script src="js/store.js"></script>
 <script src="js/app.js"></script>

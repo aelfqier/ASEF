@@ -4,4 +4,9 @@
     <string name="title_activity_main">ASEF</string>
     <string name="package_name">io.github.aelfqier.asef</string>
     <string name="custom_url_scheme">io.github.aelfqier.asef</string>
+    <string name="widget_expense">− Expense</string>
+    <string name="widget_income">+ Income</string>
+    <string name="widget_description">Add an expense or an income in one tap</string>
+    <string name="shortcut_expense">Add expense</string>
+    <string name="shortcut_income">Add income</string>
 </resources>

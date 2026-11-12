@@ -251,4 +251,21 @@ h3.sub { font-size: 13px; color: var(--muted); text-transform: uppercase; letter
 .snap-btn { color: var(--gold-2); font-size: 14px; font-weight: 700; }
 body.locked main, body.locked .tabs, body.locked .top { visibility: hidden; }
 
+
+
+/* ---------- prices, reminders, report ---------- */
+.price-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; color: #e8b9b9; }
+.price-line .link { color: #fff; font-weight: 700; }
+.quote-box { border-top: 1px solid var(--line); padding-top: 10px; }
+.quote-box .grid2 { margin-bottom: 0; }
+.qty-unit { align-self: center; margin: 0; }
+.report-banner { width: 100%; text-align: left; color: var(--fg); font-weight: 600; }
+.small-nav { margin-bottom: 10px; font-size: 15px; }
+.small-nav .icon-btn { width: 34px; height: 34px; font-size: 18px; }
+.rep-lines { display: grid; gap: 8px; font-size: 14px; }
+.rep-lines h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 8px 0 0; }
+.rep-line { display: flex; justify-content: space-between; gap: 10px; }
+.rep-line strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.due { font-size: 12px; color: var(--muted); }
+
 [hidden] { display: none !important; }
