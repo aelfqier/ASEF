@@ -21,9 +21,19 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
   deleting can be undone.
 - Ready categories, plus your own. CSV export.
 
+## Step 2
+
+- Accounts: cash, bank, wallets and savings, each in MAD, EUR or USD with a starting balance. Every entry
+  belongs to an account. Data saved before accounts existed is moved to a cash account in its currency.
+- Transfers between accounts; between currencies you type the amount that actually arrived.
+- Monthly budgets per expense category, in the main currency, with what's left or over.
+- Repeating income and expenses (every month on a day, or every week), added on their day when the app opens.
+- Plan tab: income and expenses over the last 6 months, budgets and repeating entries.
+- Backup file (save to Drive, WhatsApp or email) and restore, with undo.
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)
-2. Accounts (cash, bank, wallets) and transfers, monthly budgets, repeating entries, charts, backup
+2. Accounts (cash, bank, wallets) and transfers, monthly budgets, repeating entries, charts, backup (done)
 3. Assets and net worth: value over time and the income each asset brings in
 4. Side hustles, savings goals, French and Arabic, store release

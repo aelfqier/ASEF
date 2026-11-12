@@ -104,6 +104,112 @@ test("saved data is read back safely", () => {
 });
 
 test("CSV export", () => {
-  const csv = L.toCsv([e({ note: 'tea, "mint"' })], cats);
-  assert.equal(csv, 'date,type,category,amount,currency,note\n2026-11-10,expense,Food,10.00,MAD,"tea, ""mint"""\n');
+  const csv = L.toCsv([e({ account: "cash", note: 'tea, "mint"' })], cats, L.DEFAULT_ACCOUNTS);
+  assert.equal(csv, 'date,type,category,amount,currency,account,note\n2026-11-10,expense,Food,10.00,MAD,Cash,"tea, ""mint"""\n');
+});
+
+/* ---------- step 2 ---------- */
+const rates = { MAD: 1, EUR: 10, USD: 9 };
+function world() {
+  const s = L.emptyState();
+  s.settings.rates = { ...rates };
+  s.accounts.push({ id: "bank", name: "Bank", kind: "bank", currency: "MAD", opening: 500000 });
+  s.accounts.push({ id: "wise", name: "Wise", kind: "wallet", currency: "EUR", opening: 0 });
+  return s;
+}
+
+test("old saved data gets accounts and keeps every entry", () => {
+  const old = { schema: 1, entries: [e({ id: "a" }), e({ id: "b", currency: "EUR" }), e({ id: "c", currency: "EUR" })] };
+  const s = L.loadState(old);
+  assert.equal(s.entries.length, 3);
+  assert.deepEqual(s.accounts.map((a) => [a.id, a.currency]), [["cash", "MAD"], ["cash-eur", "EUR"]]);
+  assert.deepEqual(s.entries.map((x) => x.account), ["cash", "cash-eur", "cash-eur"]);
+  assert.deepEqual([s.transfers, s.budgets, s.recurring], [[], {}, []]);
+});
+
+test("entries must use their account's currency", () => {
+  const s = world();
+  assert.deepEqual(L.validateEntry(e({ account: "bank" }), cats, s.accounts), []);
+  assert.deepEqual(L.validateEntry(e({ account: "wise" }), cats, s.accounts), ["currency"]);
+  assert.deepEqual(L.validateEntry(e({ account: "nope" }), cats, s.accounts), ["account"]);
+});
+
+test("account balances count openings, entries and transfers", () => {
+  const s = world();
+  s.entries.push(e({ account: "cash", type: "income", category: "salary", amount: 100000 }), e({ account: "cash", amount: 20000 }));
+  s.transfers.push({ id: "t1", from: "bank", to: "cash", amount: 30000, received: 30000, date: "2026-11-10" });
+  s.transfers.push({ id: "t2", from: "bank", to: "wise", amount: 100000, received: 9500, date: "2026-11-11" });
+  assert.deepEqual(L.accountBalances(s), { cash: 110000, bank: 370000, wise: 9500 });
+  assert.deepEqual(L.accountBalances(s, "2026-11-10"), { cash: 110000, bank: 470000, wise: 0 });
+  assert.deepEqual(L.balancesByCurrency(s), { MAD: 480000, EUR: 9500, USD: 0 });
+  assert.equal(L.totalBalance(s), 480000 + 95000);
+});
+
+test("transfers are checked", () => {
+  const s = world();
+  const t = (o) => ({ id: "t", from: "cash", to: "bank", amount: 100, received: 100, date: "2026-11-10", ...o });
+  assert.deepEqual(L.validateTransfer(t({}), s.accounts), []);
+  assert.deepEqual(L.validateTransfer(t({ to: "cash" }), s.accounts), ["same"]);
+  assert.deepEqual(L.validateTransfer(t({ received: 90 }), s.accounts), ["received"]);
+  assert.deepEqual(L.validateTransfer(t({ to: "wise", received: 9 }), s.accounts), []);
+});
+
+test("accounts can be added, without duplicate names", () => {
+  const r = L.addAccount(L.DEFAULT_ACCOUNTS, { name: "CIH Bank", kind: "bank", currency: "MAD", opening: 1000 });
+  assert.equal(r.id, "cih-bank");
+  assert.equal(L.addAccount(r.accounts, { name: "cih bank", currency: "MAD" }).error, "exists");
+  assert.equal(L.addAccount(r.accounts, { name: "X", currency: "GBP" }).error, "currency");
+});
+
+test("budgets show what is spent and left this month", () => {
+  const s = world();
+  s.budgets = { food: 100000, rent: 300000 };
+  s.entries.push(e({ account: "cash", amount: 80000 }), e({ account: "wise", currency: "EUR", amount: 3000 }), e({ account: "cash", amount: 9999, date: "2026-10-01" }));
+  const b = L.budgetStatus(s, "2026-11-10");
+  assert.deepEqual(b[0], { category: "food", budget: 100000, spent: 110000, left: -10000, pct: 110 });
+  assert.deepEqual(b[1], { category: "rent", budget: 300000, spent: 0, left: 300000, pct: 0 });
+});
+
+test("monthly repeats fall on their day, clamped to short months", () => {
+  const r = { freq: "monthly", day: 31, start: "2026-01-31" };
+  assert.deepEqual(L.dueDates(r, "2026-04-15"), ["2026-01-31", "2026-02-28", "2026-03-31"]);
+  assert.deepEqual(L.dueDates({ ...r, last: "2026-02-28" }, "2026-04-30"), ["2026-03-31", "2026-04-30"]);
+  assert.deepEqual(L.dueDates({ freq: "monthly", day: 5, start: "2026-11-10" }, "2026-12-31"), ["2026-12-05"]);
+});
+
+test("weekly repeats every 7 days from the start", () => {
+  assert.deepEqual(L.dueDates({ freq: "weekly", start: "2026-11-02" }, "2026-11-20"), ["2026-11-02", "2026-11-09", "2026-11-16"]);
+  assert.deepEqual(L.dueDates({ freq: "weekly", start: "2026-11-02", last: "2026-11-16" }, "2026-11-20"), []);
+});
+
+test("repeating rules add their entries once", () => {
+  const s = world();
+  s.recurring.push({ id: "r1", type: "income", amount: 800000, account: "bank", category: "salary", freq: "monthly", day: 1, start: "2026-09-01", note: "Pay" });
+  assert.equal(L.runRecurring(s, "2026-11-10"), 3);
+  assert.equal(L.runRecurring(s, "2026-11-10"), 0);
+  assert.equal(s.recurring[0].last, "2026-11-01");
+  assert.deepEqual(s.entries.map((x) => [x.date, x.currency, x.recurring]), [["2026-09-01", "MAD", "r1"], ["2026-10-01", "MAD", "r1"], ["2026-11-01", "MAD", "r1"]]);
+  assert.deepEqual(L.validateRecurring(s.recurring[0], s), []);
+  assert.deepEqual(L.validateRecurring({ ...s.recurring[0], category: "food" }, s), ["category"]);
+});
+
+test("six months of income and expenses for the chart", () => {
+  const list = [e({ type: "income", category: "salary", amount: 1000, date: "2026-11-01" }), e({ amount: 300, date: "2026-09-15" }), e({ amount: 50, currency: "EUR", date: "2026-11-02" })];
+  const m = L.monthlySeries(list, 3, "2026-11-10", "MAD", rates);
+  assert.deepEqual(m, [
+    { month: "2026-09", income: 0, expense: 300, net: -300 },
+    { month: "2026-10", income: 0, expense: 0, net: 0 },
+    { month: "2026-11", income: 1000, expense: 500, net: 500 },
+  ]);
+});
+
+test("backup files round trip and other files are refused", () => {
+  const s = world();
+  s.entries.push(e({ account: "bank" }));
+  s.budgets = { food: 5000 };
+  const back = L.parseBackup(L.toBackup(s));
+  assert.deepEqual(back, L.loadState(s));
+  assert.equal(back.entries.length, 1);
+  assert.equal(L.parseBackup('{"entries":[]}'), null);
+  assert.equal(L.parseBackup("garbage"), null);
 });

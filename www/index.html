@@ -25,6 +25,16 @@
     </div>
 
     <div class="card">
+      <div class="card-head"><h2>Accounts</h2><button class="link" id="transferBtn">Transfer</button></div>
+      <div class="acc-row" id="accRow"></div>
+    </div>
+
+    <div class="card" id="homeBudgets" hidden>
+      <div class="card-head"><h2>Budgets</h2><button class="link" data-go="plan">Plan</button></div>
+      <div id="homeBudgetList" class="budgets"></div>
+    </div>
+
+    <div class="card">
       <div class="card-head"><h2 id="monthTitle">This month</h2></div>
       <div class="flow">
         <div class="flow-item in"><span>Income</span><strong id="mIn">0</strong></div>
@@ -63,8 +73,56 @@
     <div id="historyList"></div>
   </section>
 
+  <!-- Plan -->
+  <section class="view" id="view-plan" data-view="plan" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Last 6 months</h2><span class="legend"><i class="lg in"></i>Income <i class="lg out"></i>Expenses</span></div>
+      <div id="chart" class="chart"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Monthly budgets</h2><span class="muted" id="budgetMonth"></span></div>
+      <div id="budgetList" class="budgets"></div>
+      <form id="budgetForm" class="inline-form">
+        <select id="budgetCat"></select>
+        <input id="budgetAmt" inputmode="decimal" placeholder="Amount">
+        <button class="btn small" type="submit">Set</button>
+      </form>
+      <p class="muted small">In your main currency. Set 0 to remove a budget.</p>
+    </div>
+    <div class="card">
+      <h2>Repeating</h2>
+      <p class="muted">Salary, rent, subscriptions: added for you on their day.</p>
+      <div id="recList" class="list"></div>
+      <form id="recForm" class="rec-form">
+        <div class="seg" id="recTypeSeg"><button type="button" data-type="expense" class="on">Expense</button><button type="button" data-type="income">Income</button></div>
+        <div class="grid2">
+          <label>Amount<input id="recAmt" inputmode="decimal" placeholder="0.00"></label>
+          <label>Account<select id="recAcc"></select></label>
+          <label>Category<select id="recCat"></select></label>
+          <label>Repeats<select id="recFreq"><option value="monthly">Every month</option><option value="weekly">Every week</option></select></label>
+          <label>First date<input type="date" id="recStart"></label>
+          <label>Note<input id="recNote" maxlength="60" placeholder="Optional"></label>
+        </div>
+        <div class="err" id="recErr" hidden></div>
+        <button class="btn" type="submit">Add repeating entry</button>
+      </form>
+    </div>
+  </section>
+
   <!-- Settings -->
   <section class="view" id="view-settings" data-view="settings" hidden>
+    <div class="card">
+      <h2>Accounts</h2>
+      <p class="muted">Cash, bank accounts and wallets. The starting balance is what the account holds today.</p>
+      <div id="accList" class="list"></div>
+      <form id="accForm" class="grid2 acc-form">
+        <label>Name<input id="accName" maxlength="30" placeholder="e.g. CIH Bank"></label>
+        <label>Type<select id="accKind"><option value="cash">Cash</option><option value="bank">Bank</option><option value="wallet">Wallet</option><option value="savings">Savings</option></select></label>
+        <label>Currency<select id="accCur"><option>MAD</option><option>EUR</option><option>USD</option></select></label>
+        <label>Starting balance<input id="accOpen" inputmode="decimal" placeholder="0.00"></label>
+        <button class="btn small span2" type="submit">Add account</button>
+      </form>
+    </div>
     <div class="card">
       <h2>Main currency</h2>
       <p class="muted">Your total balance is shown in this currency.</p>
@@ -87,8 +145,13 @@
     </div>
     <div class="card">
       <h2>Your data</h2>
-      <p class="muted">Everything stays on this phone. Export a copy as a spreadsheet file.</p>
-      <button class="btn ghost" id="exportCsv">Export CSV</button>
+      <p class="muted">Everything stays on this phone. Save a backup file to Drive, WhatsApp or email, and restore it on a new phone.</p>
+      <div class="btn-row">
+        <button class="btn" id="exportBackup">Save backup</button>
+        <button class="btn ghost" id="importBackup">Restore backup</button>
+        <button class="btn ghost" id="exportCsv">Export CSV</button>
+      </div>
+      <input type="file" id="backupFile" accept=".json,application/json" hidden>
     </div>
   </section>
 </main>
@@ -97,6 +160,7 @@
   <button data-go="home" class="on"><span class="ti">◉</span>Home</button>
   <button class="add-btn" id="addBtn" aria-label="Add income or expense">+</button>
   <button data-go="history"><span class="ti">☰</span>History</button>
+  <button data-go="plan"><svg class="ti" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Plan</button>
   <button data-go="settings"><span class="ti">⚙</span>Settings</button>
 </nav>
 
@@ -107,15 +171,26 @@
       <button type="button" class="icon-btn" id="closeSheet" aria-label="Close">✕</button>
     </div>
     <div class="seg type-seg" id="typeSeg">
-      <button type="button" data-type="expense" class="on">Expense</button><button type="button" data-type="income">Income</button>
+      <button type="button" data-type="expense" class="on">Expense</button><button type="button" data-type="income">Income</button><button type="button" data-type="transfer">Transfer</button>
     </div>
     <div class="amount-row">
       <input id="fAmount" inputmode="decimal" placeholder="0.00" autocomplete="off" aria-label="Amount">
-      <div class="seg cur-seg" id="curSeg"></div>
+      <span class="amt-cur" id="amtCur"></span>
     </div>
     <div class="err" id="amountErr" hidden>Enter an amount above zero.</div>
-    <div class="chips" id="catChips"></div>
-    <div class="err" id="catErr" hidden>Pick a category.</div>
+    <div class="field-label" id="accLabel">Account</div>
+    <div class="chips" id="accChips"></div>
+    <div id="toBox" hidden>
+      <div class="field-label">To</div>
+      <div class="chips" id="toChips"></div>
+      <div class="err" id="toErr" hidden>Pick a different account to move the money to.</div>
+      <label class="recv" id="recvBox" hidden>Amount received<input id="fReceived" inputmode="decimal" autocomplete="off"><span id="recvCur"></span></label>
+    </div>
+    <div id="catBox">
+      <div class="field-label">Category</div>
+      <div class="chips" id="catChips"></div>
+      <div class="err" id="catErr" hidden>Pick a category.</div>
+    </div>
     <div class="row2">
       <label>Date<input type="date" id="fDate"></label>
       <label>Note<input id="fNote" maxlength="120" placeholder="Optional"></label>
