@@ -213,3 +213,84 @@ test("backup files round trip and other files are refused", () => {
   assert.equal(L.parseBackup('{"entries":[]}'), null);
   assert.equal(L.parseBackup("garbage"), null);
 });
+
+/* ---------- step 3 ---------- */
+function rich() {
+  const s = world();
+  s.accounts[0].opening = 1000000; // cash 10 000 MAD
+  let r = L.addAsset(s.assets, { name: "Flat Casablanca", kind: "property", currency: "MAD", value: 80000000, date: "2026-01-15", cost: 75000000 });
+  r = L.addAsset(r.assets, { name: "Gold", kind: "gold", currency: "EUR", value: 200000, date: "2026-06-01" });
+  r = L.addAsset(r.assets, { name: "Car loan", kind: "debt", currency: "MAD", value: 5000000, date: "2026-03-01" });
+  s.assets = r.assets;
+  return s;
+}
+
+test("assets are added with a first value, without duplicate names", () => {
+  const s = rich();
+  assert.deepEqual(s.assets.map((a) => a.id), ["asset-flat-casablanca", "asset-gold", "asset-car-loan"]);
+  assert.equal(L.addAsset(s.assets, { name: "gold", kind: "gold", currency: "MAD", value: 1, date: "2026-01-01" }).error, "exists");
+  assert.equal(L.addAsset([], { name: "X", kind: "boat", currency: "MAD", value: 1, date: "2026-01-01" }).error, "kind");
+  assert.equal(L.addAsset([], { name: "X", kind: "gold", currency: "MAD", value: -1, date: "2026-01-01" }).error, "value");
+});
+
+test("asset value history: latest on or before a date", () => {
+  let a = rich().assets[0];
+  a = L.setAssetValue(a, "2026-10-01", 82000000);
+  a = L.setAssetValue(a, "2026-05-01", 79000000);
+  a = L.setAssetValue(a, "2026-10-01", 83000000); // same day replaces
+  assert.deepEqual(a.values.map((v) => v.date), ["2026-01-15", "2026-05-01", "2026-10-01"]);
+  assert.equal(L.assetValueAt(a, "2026-01-01"), 0);
+  assert.equal(L.assetValueAt(a, "2026-07-01"), 79000000);
+  assert.equal(L.assetValueAt(a, "2026-11-10"), 83000000);
+  assert.equal(L.setAssetValue(a, "2026-13-01", 5), null);
+});
+
+test("asset income, costs, gain and yield", () => {
+  const s = rich();
+  s.entries.push(
+    e({ account: "cash", type: "income", category: "rent-in", amount: 400000, date: "2026-10-05", asset: "asset-flat-casablanca" }),
+    e({ account: "cash", type: "income", category: "rent-in", amount: 400000, date: "2026-11-05", asset: "asset-flat-casablanca" }),
+    e({ account: "cash", type: "expense", category: "asset-costs", amount: 100000, date: "2026-11-06", asset: "asset-flat-casablanca" }),
+    e({ account: "cash", type: "income", category: "rent-in", amount: 400000, date: "2025-09-01", asset: "asset-flat-casablanca" }),
+  );
+  const st = L.assetStats(s, s.assets[0], "2026-11-10");
+  assert.equal(st.value, 80000000);
+  assert.equal(st.gain, 5000000);
+  assert.equal(st.gainPct, 6.7);
+  assert.deepEqual(st.year, { income: 800000, expense: 100000, net: 700000 });
+  assert.equal(st.all.income, 1200000);
+  assert.equal(st.yieldPct, 0.9);
+});
+
+test("net worth is cash plus assets minus debts, at any date", () => {
+  const s = rich();
+  s.settings.rates = { MAD: 1, EUR: 10, USD: 9 };
+  // 2026-11-10: cash 10 000 + bank 5 000, flat 800 000, gold 2 000 EUR = 20 000 MAD, loan 50 000
+  assert.deepEqual(L.netWorth(s, "2026-11-10"), { cash: 1500000, assets: 82000000, debts: 5000000, total: 78500000 });
+  // before the gold and the loan were recorded
+  assert.deepEqual(L.netWorth(s, "2026-02-01"), { cash: 1500000, assets: 80000000, debts: 0, total: 81500000 });
+  s.entries.push(e({ account: "cash", amount: 500000, date: "2026-11-01" }));
+  const series = L.netWorthSeries(s, 3, "2026-11-10");
+  assert.deepEqual(series.map((x) => [x.month, x.date, x.total]), [
+    ["2026-09", "2026-09-30", 78500000], ["2026-10", "2026-10-31", 78500000], ["2026-11", "2026-11-10", 78000000],
+  ]);
+});
+
+test("allocation groups assets by kind", () => {
+  const s = rich();
+  s.settings.rates = { MAD: 1, EUR: 10, USD: 9 };
+  assert.deepEqual(L.allocation(s, "2026-11-10"), [{ kind: "property", value: 80000000, pct: 98 }, { kind: "gold", value: 2000000, pct: 2 }]);
+});
+
+test("saved assets are cleaned and broken asset links dropped", () => {
+  const s = rich();
+  s.entries.push(e({ id: "x1", account: "cash", type: "income", category: "dividends", amount: 100, asset: "asset-gold" }));
+  s.entries.push(e({ id: "x2", account: "cash", amount: 100, asset: "asset-gone" }));
+  s.assets.push({ id: "bad", name: "Bad", kind: "yacht", currency: "MAD", values: [] });
+  const back = L.loadState(JSON.parse(JSON.stringify(s)));
+  assert.equal(back.assets.length, 3);
+  assert.equal(back.entries.find((x) => x.id === "x1").asset, "asset-gold");
+  assert.equal("asset" in back.entries.find((x) => x.id === "x2"), false);
+  assert.ok(back.categories.some((c) => c.id === "rent-in"));
+  assert.deepEqual(L.parseBackup(L.toBackup(back)), back);
+});

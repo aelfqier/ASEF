@@ -8,13 +8,15 @@
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const KIND = { cash: "Cash", bank: "Bank", wallet: "Wallet", savings: "Savings" };
+  const ASSET_KIND = { property: "Property", land: "Land", gold: "Gold", stocks: "Stocks", crypto: "Crypto", savings: "Savings", vehicle: "Vehicle", business: "Business", other: "Other", debt: "Debt" };
 
   let state = L.emptyState();
-  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense" };
+  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false };
 
   const save = () => S.write(state);
   const cat = (id) => state.categories.find((c) => c.id === id) || { name: id, type: "expense" };
   const acc = (id) => state.accounts.find((a) => a.id === id) || { name: "?", currency: "MAD" };
+  const assetById = (id) => state.assets.find((a) => a.id === id);
   const money = (c, cur, o) => L.formatMoney(c, cur || state.settings.main, o);
   const amountText = (cents) => (cents / 100).toFixed(2);
 
@@ -40,7 +42,8 @@
     } else {
       dot = el("span", "dot", cat(e.category).name.slice(0, 1).toUpperCase());
       mid.append(el("span", "row-title", cat(e.category).name));
-      const sub = [state.accounts.length > 1 ? acc(e.account).name : "", e.recurring ? "↻" : "", e.note].filter(Boolean).join(" · ");
+      const linked = e.asset && assetById(e.asset);
+      const sub = [state.accounts.length > 1 ? acc(e.account).name : "", linked ? "◆ " + linked.name : "", e.recurring ? "↻" : "", e.note].filter(Boolean).join(" · ");
       if (sub) mid.append(el("span", "row-note", sub));
       amt = el("span", "row-amt", L.formatMoney(L.signed(e), e.currency, { sign: true }));
     }
@@ -81,8 +84,15 @@
     const total = L.totalBalance(state);
     $("heroBalance").textContent = money(total);
     $("heroBalance").classList.toggle("neg", total < 0);
+    $("heroBalance").classList.toggle("long", $("heroBalance").textContent.length > 13);
     const all = L.totalIn(state.entries, main, rates);
     $("heroSub").textContent = state.entries.length ? `${money(all.income)} in · ${money(all.expense)} out, all time` : "Add your first income or expense with +";
+    const nwBtn = $("heroNw");
+    nwBtn.hidden = !state.assets.length;
+    if (state.assets.length) {
+      const nw = L.netWorth(state, L.today());
+      nwBtn.replaceChildren(el("span", null, "Net worth"), el("strong", null, money(nw.total)), el("span", null, "›"));
+    }
     const row = $("curRow"); row.replaceChildren();
     const per = L.balancesByCurrency(state);
     for (const c of L.CURRENCIES) {
@@ -152,6 +162,170 @@
       card.append(head, lst);
       box.append(card);
     }
+  }
+
+  /* ---------- wealth ---------- */
+  function renderWealth() {
+    const t = L.today();
+    const nw = L.netWorth(state, t);
+    $("nwTotal").textContent = money(nw.total);
+    $("nwTotal").classList.toggle("neg", nw.total < 0);
+    $("nwTotal").classList.toggle("long", $("nwTotal").textContent.length > 13);
+    $("nwCash").textContent = money(nw.cash);
+    $("nwAssets").textContent = money(nw.assets);
+    $("nwDebts").textContent = nw.debts ? "−" + money(nw.debts) : money(0);
+    const series = L.netWorthSeries(state, 12, t);
+    // Compare with the first month that has anything recorded, so an empty past doesn't look like growth.
+    const dates = [...state.entries.map((e) => e.date), ...state.assets.map((a) => a.values[0].date)].sort();
+    const startIdx = Math.max(0, series.findIndex((m) => dates.length && dates[0] <= m.date));
+    const from = series[startIdx];
+    const change = nw.total - from.total;
+    const fm = L.parseDate(from.date);
+    $("nwChange").textContent = !state.assets.length && !state.entries.length ? "Add what you own to see your wealth grow."
+      : startIdx === series.length - 1 ? "Your chart fills in month by month."
+      : `${money(change, null, { sign: true })} since the end of ${MONTHS[fm.getMonth()]} ${fm.getFullYear()}`;
+
+    const max = Math.max(1, ...series.map((m) => Math.abs(m.total)));
+    const ch = $("nwChart"); ch.replaceChildren();
+    for (const m of series) {
+      const col = el("div", "col"), bars = el("div", "bars");
+      const bar = el("i", m.total < 0 ? "neg" : ""); bar.style.height = `${(Math.abs(m.total) / max) * 100}%`; bar.title = `${m.month}: ${money(m.total)}`;
+      bars.append(bar);
+      col.append(bars, el("span", "col-m", MONTHS[Number(m.month.slice(5)) - 1].slice(0, 1)));
+      ch.append(col);
+    }
+
+    const alloc = L.allocation(state, t);
+    $("allocCard").hidden = !alloc.length;
+    const al = $("alloc"); al.replaceChildren();
+    for (const a of alloc) {
+      const line = el("div", "cat-bar");
+      const bar = el("div", "bar"); const fill = el("i", "asset"); fill.style.width = `${Math.max(3, a.pct)}%`; bar.append(fill);
+      line.append(el("span", null, `${ASSET_KIND[a.kind]} ${a.pct}%`), bar, el("strong", null, money(a.value)));
+      al.append(line);
+    }
+
+    for (const [box, debts] of [[$("assetList"), false], [$("debtList"), true]]) {
+      box.replaceChildren();
+      const list = state.assets.filter((a) => (a.kind === "debt") === debts);
+      if (!list.length) box.append(el("p", "empty", debts ? "No debts recorded. Loans and credit you owe go here." : "Property, gold, stocks, savings, a car, a business: add what you own."));
+      for (const a of list) {
+        const st = L.assetStats(state, a, t);
+        const r = el("button", `row ${debts ? "debt" : "asset"}`); r.type = "button";
+        const mid = el("span", "row-mid");
+        mid.append(el("span", "row-title", a.name));
+        const bits = [ASSET_KIND[a.kind]];
+        if (!debts && st.year.net) bits.push(`${L.formatMoney(st.year.net, a.currency, { sign: true })} a year`);
+        if (!debts && st.yieldPct) bits.push(`${st.yieldPct}% yield`);
+        mid.append(el("span", "row-note", bits.join(" · ")));
+        const right = el("span", "row-mid right");
+        right.append(el("span", "row-amt", (debts ? "−" : "") + L.formatMoney(st.value, a.currency)));
+        if (!debts && st.gain && st.base) right.append(el("span", "row-note " + (st.gain > 0 ? "row-sub-pos" : "row-sub-neg"), `${L.formatMoney(st.gain, a.currency, { sign: true })}${st.gainPct != null ? ` (${st.gainPct > 0 ? "+" : ""}${st.gainPct}%)` : ""}`));
+        r.append(el("span", "dot", debts ? "−" : "◆"), mid, right);
+        r.addEventListener("click", () => openAsset(a.id));
+        box.append(r);
+      }
+    }
+  }
+
+  function openAsset(id, debt) {
+    ui.viewing = id || null;
+    ui.newDebt = !!debt;
+    const a = id && assetById(id);
+    $("assetForm").hidden = !!a;
+    $("assetView").hidden = !a;
+    $("aErr").hidden = true;
+    if (!a) {
+      $("aTitle").textContent = debt ? "New debt" : "New asset";
+      const kinds = debt ? ["debt"] : L.ASSET_KINDS.filter((k) => k !== "debt");
+      fillSelect($("aKind"), kinds.map((k) => [k, ASSET_KIND[k]]));
+      $("aKind").disabled = !!debt;
+      $("aValueLabel").textContent = debt ? "Amount you owe" : "Value today";
+      $("aCostBox").hidden = !!debt;
+      $("aCur").value = state.settings.main;
+      for (const f of ["aName", "aValue", "aCost"]) $(f).value = "";
+      $("aDate").value = L.today();
+    } else renderAssetView();
+    $("assetSheet").showModal();
+  }
+
+  function renderAssetView() {
+    const a = assetById(ui.viewing); if (!a) return;
+    const debt = a.kind === "debt", t = L.today();
+    const st = L.assetStats(state, a, t);
+    const m = (c, o) => L.formatMoney(c, a.currency, o);
+    $("aTitle").textContent = `${a.name}`;
+    const stats = $("aStats"); stats.replaceChildren();
+    const stat = (label, value, sub) => { const d = el("div", "stat"); d.append(el("span", null, label), el("strong", null, value)); if (sub) d.append(el("em", null, sub)); stats.append(d); };
+    stat(debt ? "You owe" : "Value", m(st.value), `${ASSET_KIND[a.kind]} · updated ${dayLabel(st.updated)}`);
+    if (debt) {
+      const firstV = a.values[0].value;
+      stat("Paid off", m(Math.max(0, firstV - st.value)), `of ${m(firstV)}`);
+    } else {
+      stat("Gain", m(st.gain, { sign: true }), st.gainPct != null ? `${st.gainPct > 0 ? "+" : ""}${st.gainPct}% on ${m(st.base)}` : "");
+      stat("Income, last 12 months", m(st.year.net, { sign: true }), st.year.expense ? `${m(st.year.income)} in · ${m(st.year.expense)} costs` : "Link rent or dividends when you add them");
+      stat("Yield", st.yieldPct != null ? `${st.yieldPct}%` : "—", "Yearly income ÷ value");
+    }
+    $("vValue").value = ""; $("vValue").placeholder = debt ? "Still owed" : "New value";
+    $("vDate").value = t;
+    const h = $("aHistory"); h.replaceChildren();
+    const vals = a.values.slice().reverse();
+    vals.forEach((v, i) => {
+      const prev = vals[i + 1];
+      const row = el("div");
+      const left = el("span", null, dayLabel(v.date));
+      const right = el("span", null, m(v.value));
+      if (prev) { const d = v.value - prev.value; if (d) right.append(el("span", "chg " + ((d > 0) !== debt ? "row-sub-pos" : "row-sub-neg"), m(d, { sign: true }))); }
+      row.append(left, right);
+      h.append(row);
+    });
+    const flows = L.sortEntries(state.entries.filter((e) => e.asset === a.id)).slice(0, 8);
+    $("aFlowsLabel").hidden = debt && !flows.length;
+    fillList($("aFlows"), flows, "Nothing linked yet. When you add rent, dividends or upkeep, pick this asset.");
+    for (const r of $("aFlows").querySelectorAll(".row")) r.addEventListener("click", () => $("assetSheet").close(), { capture: true });
+  }
+
+  function saveNewAsset(ev) {
+    ev.preventDefault();
+    const costRaw = $("aCost").value.trim();
+    const input = {
+      name: $("aName").value, kind: ui.newDebt ? "debt" : $("aKind").value, currency: $("aCur").value,
+      value: $("aValue").value.trim() === "0" ? 0 : L.parseAmount($("aValue").value), date: $("aDate").value,
+      cost: costRaw && !ui.newDebt ? L.parseAmount(costRaw) : undefined,
+    };
+    const r = L.addAsset(state.assets, input);
+    const msg = { name: "Type a name.", value: "Enter the value.", date: "Pick a date.", cost: "What you paid isn't a number.", exists: "You already have one with that name." };
+    if (r.error) { $("aErr").textContent = msg[r.error] || "Check the details."; $("aErr").hidden = false; return; }
+    state.assets = r.assets; save();
+    $("assetSheet").close(); render();
+    toast(`${input.name.trim()} added`);
+  }
+
+  function updateValue(ev) {
+    ev.preventDefault();
+    const a = assetById(ui.viewing); if (!a) return;
+    const raw = $("vValue").value.trim();
+    const v = raw === "0" ? 0 : L.parseAmount(raw);
+    if (v == null) { toast("Type the new value first"); return; }
+    const next = L.setAssetValue(a, $("vDate").value, v);
+    if (!next) { toast("Pick a date"); return; }
+    state.assets = state.assets.map((x) => (x.id === a.id ? next : x)); save();
+    renderAssetView(); render();
+    toast(`${a.name}: ${L.formatMoney(v, a.currency)}`, () => { state.assets = state.assets.map((x) => (x.id === a.id ? a : x)); save(); renderAssetView(); render(); });
+  }
+
+  function deleteAsset() {
+    const a = assetById(ui.viewing); if (!a) return;
+    const links = state.entries.filter((e) => e.asset === a.id).map((e) => e.id);
+    const at = state.assets.indexOf(a);
+    state.assets = state.assets.filter((x) => x.id !== a.id);
+    state.entries = state.entries.map((e) => { if (e.asset !== a.id) return e; const c = { ...e }; delete c.asset; return c; });
+    save(); $("assetSheet").close(); render();
+    toast(`${a.name} deleted`, () => {
+      state.assets.splice(at, 0, a);
+      state.entries = state.entries.map((e) => (links.includes(e.id) ? { ...e, asset: a.id } : e));
+      save(); render();
+    });
   }
 
   /* ---------- plan ---------- */
@@ -276,6 +450,7 @@
     if (ui.view === "home") renderHome();
     if (ui.view === "history") renderHistory();
     if (ui.view === "plan") renderPlan();
+    if (ui.view === "wealth") renderWealth();
     if (ui.view === "settings") renderSettings();
   }
 
@@ -310,6 +485,14 @@
         if (c) $("fReceived").value = amountText(c);
       }
     }
+    const linkable = state.assets.filter((a) => ui.type === "expense" || a.kind !== "debt");
+    $("assetBox").hidden = transfer || !linkable.length;
+    const ac = $("assetChips"); ac.replaceChildren();
+    for (const a of [{ id: null, name: "None" }, ...linkable]) {
+      const b = el("button", "chip" + (a.id === ui.asset ? " on" : ""), a.name); b.type = "button";
+      b.addEventListener("click", () => { ui.asset = a.id; renderSheetChoices(); });
+      ac.append(b);
+    }
     const chips = $("catChips"); chips.replaceChildren();
     for (const c of state.categories.filter((x) => x.type === ui.type)) {
       const b = el("button", "chip" + (c.id === ui.category ? " on" : ""), c.name); b.type = "button";
@@ -330,6 +513,7 @@
     ui.account = item ? (item.from || item.account) : defaultAccount();
     ui.to = item && item.to ? item.to : null;
     ui.category = item && !isTransfer ? item.category : null;
+    ui.asset = item && item.asset ? item.asset : null;
     $("sheetTitle").textContent = item ? (isTransfer ? "Edit transfer" : "Edit entry") : "New entry";
     $("fAmount").value = item ? amountText(item.amount) : "";
     $("fReceived").value = item && isTransfer && item.received !== item.amount ? amountText(item.received) : "";
@@ -371,6 +555,8 @@
       createdAt: editing ? editing.createdAt : Date.now(),
     };
     if (editing && editing.recurring) draft.recurring = editing.recurring;
+    const linked = ui.asset && assetById(ui.asset);
+    if (linked && (draft.type === "expense" || linked.kind !== "debt")) draft.asset = linked.id;
     const errs = L.validateEntry(draft, state.categories, state.accounts);
     $("amountErr").hidden = !errs.includes("amount");
     $("catErr").hidden = !errs.includes("category");
@@ -413,12 +599,20 @@
     $("delBtn").addEventListener("click", deleteItem);
     $("closeSheet").addEventListener("click", () => $("sheet").close());
     for (const b of $("typeSeg").children) b.addEventListener("click", () => {
-      if (ui.type !== b.dataset.type) { ui.type = b.dataset.type; ui.category = null; renderSheetChoices(); }
+      if (ui.type !== b.dataset.type) { ui.type = b.dataset.type; ui.category = null; if (ui.type === "income" && ui.asset && (assetById(ui.asset) || {}).kind === "debt") ui.asset = null; renderSheetChoices(); }
     });
     $("fAmount").addEventListener("input", () => { if (ui.type === "transfer" && !$("recvBox").hidden) { $("fReceived").value = ""; renderSheetChoices(); } });
     for (const b of $("periodSeg").children) b.addEventListener("click", () => { ui.period = b.dataset.period; ui.ref = L.today(); renderHistory(); });
     $("prevPeriod").addEventListener("click", () => { ui.ref = L.shiftPeriod(ui.period, ui.ref, -1); renderHistory(); });
     $("nextPeriod").addEventListener("click", () => { ui.ref = L.shiftPeriod(ui.period, ui.ref, 1); renderHistory(); });
+
+    // Wealth
+    $("addAssetBtn").addEventListener("click", () => openAsset(null, false));
+    $("addDebtBtn").addEventListener("click", () => openAsset(null, true));
+    $("closeAsset").addEventListener("click", () => $("assetSheet").close());
+    $("assetForm").addEventListener("submit", saveNewAsset);
+    $("valueForm").addEventListener("submit", updateValue);
+    $("delAsset").addEventListener("click", deleteAsset);
 
     // Plan
     $("budgetForm").addEventListener("submit", (ev) => {

@@ -3,7 +3,7 @@
 (function (root) {
   "use strict";
 
-  const SCHEMA = 2;
+  const SCHEMA = 3;
   const CURRENCIES = ["MAD", "EUR", "USD"];
   const SYMBOLS = { MAD: "MAD", EUR: "€", USD: "$" };
   // Value of one unit in MAD. Starting guesses only: the user updates them in Settings.
@@ -15,6 +15,8 @@
     { id: "business", name: "Business", type: "income" },
     { id: "gift-in", name: "Gift", type: "income" },
     { id: "other-in", name: "Other income", type: "income" },
+    { id: "rent-in", name: "Rent received", type: "income" },
+    { id: "dividends", name: "Dividends & interest", type: "income" },
     { id: "food", name: "Food", type: "expense" },
     { id: "transport", name: "Transport", type: "expense" },
     { id: "rent", name: "Rent", type: "expense" },
@@ -24,7 +26,11 @@
     { id: "family", name: "Family", type: "expense" },
     { id: "leisure", name: "Leisure", type: "expense" },
     { id: "other-out", name: "Other expense", type: "expense" },
+    { id: "asset-costs", name: "Asset costs", type: "expense" },
   ];
+
+  // Things you own that hold or grow value; "debt" is money you owe and counts against net worth.
+  const ASSET_KINDS = ["property", "land", "gold", "stocks", "crypto", "savings", "vehicle", "business", "other", "debt"];
 
   const ACCOUNT_KINDS = ["cash", "bank", "wallet", "savings"];
   const DEFAULT_ACCOUNTS = [{ id: "cash", name: "Cash", kind: "cash", currency: "MAD", opening: 0 }];
@@ -85,6 +91,7 @@
       const a = accounts.find((x) => x.id === e.account);
       if (!a) errs.push("account"); else if (a.currency !== e.currency) errs.push("currency");
     }
+    if (e.asset != null && typeof e.asset !== "string") errs.push("asset");
     if (!isDay(e.date)) errs.push("date");
     const cat = (categories || []).find((c) => c.id === e.category);
     if (!cat || cat.type !== e.type) errs.push("category");
@@ -322,6 +329,106 @@
     return out;
   }
 
+  /* ---------- assets and net worth ---------- */
+  // An asset keeps a history of values, so net worth can be shown at any past date.
+  function addAsset(assets, input) {
+    const i = input || {};
+    const name = String(i.name || "").trim();
+    if (!name) return { error: "name" };
+    if (!ASSET_KINDS.includes(i.kind)) return { error: "kind" };
+    if (!CURRENCIES.includes(i.currency)) return { error: "currency" };
+    if (!Number.isSafeInteger(i.value) || i.value < 0) return { error: "value" };
+    if (!isDay(i.date)) return { error: "date" };
+    if (i.cost != null && (!Number.isSafeInteger(i.cost) || i.cost < 0)) return { error: "cost" };
+    if (assets.some((a) => a.name.toLowerCase() === name.toLowerCase())) return { error: "exists" };
+    let id = `asset-${slug(name)}`, n = 2;
+    while (assets.some((a) => a.id === id)) id = `asset-${slug(name)}-${n++}`;
+    const asset = { id, name, kind: i.kind, currency: i.currency, values: [{ date: i.date, value: i.value }] };
+    if (i.cost != null) asset.cost = i.cost;
+    if (i.note) asset.note = String(i.note).trim();
+    return { assets: [...assets, asset], id };
+  }
+
+  // Sets the value on a date (replacing that day's value) and keeps the history in date order.
+  function setAssetValue(asset, date, value) {
+    if (!isDay(date) || !Number.isSafeInteger(value) || value < 0) return null;
+    const values = asset.values.filter((v) => v.date !== date).concat({ date, value }).sort((a, b) => (a.date < b.date ? -1 : 1));
+    return { ...asset, values };
+  }
+
+  // The latest value on or before a date; 0 before the asset was first recorded.
+  function assetValueAt(asset, date) {
+    let v = 0;
+    for (const x of asset.values) { if (x.date <= date) v = x.value; else break; }
+    return v;
+  }
+
+  const ownedSince = (asset) => (asset.values[0] ? asset.values[0].date : "9999-12-31");
+
+  // Income and costs linked to an asset, in the asset's currency, between two dates.
+  function assetFlows(state, asset, from, to) {
+    const t = { income: 0, expense: 0, net: 0 };
+    for (const e of state.entries) {
+      if (e.asset !== asset.id || e.date < from || e.date > to) continue;
+      const v = convert(e.amount, e.currency, asset.currency, state.settings.rates);
+      if (v == null) continue;
+      if (e.type === "income") t.income += v; else t.expense += v;
+    }
+    t.net = t.income - t.expense;
+    return t;
+  }
+
+  // Everything worth knowing about one asset today, in its own currency.
+  function assetStats(state, asset, today) {
+    const value = assetValueAt(asset, today);
+    const first = asset.values[0] ? asset.values[0].value : 0;
+    const base = asset.cost != null ? asset.cost : first;
+    const gain = value - base;
+    const year = assetFlows(state, asset, addDays(today, -364), today);
+    const all = assetFlows(state, asset, "0000-01-01", today);
+    const yieldPct = value > 0 ? Math.round((year.net / value) * 1000) / 10 : null;
+    const gainPct = base > 0 ? Math.round((gain / base) * 1000) / 10 : null;
+    return { value, base, gain, gainPct, year, all, yieldPct, updated: asset.values.length ? asset.values[asset.values.length - 1].date : null };
+  }
+
+  // Cash in accounts, plus assets, minus debts, all in the main currency, as it stood on a date.
+  function netWorth(state, date) {
+    const { main, rates } = state.settings;
+    let cash = 0, assets = 0, debts = 0;
+    const bal = accountBalances(state, date);
+    for (const a of state.accounts) { const v = convert(bal[a.id], a.currency, main, rates); if (v != null) cash += v; }
+    for (const a of state.assets || []) {
+      if (ownedSince(a) > date) continue;
+      const v = convert(assetValueAt(a, date), a.currency, main, rates);
+      if (v == null) continue;
+      if (a.kind === "debt") debts += v; else assets += v;
+    }
+    return { cash, assets, debts, total: cash + assets - debts };
+  }
+
+  // Net worth at the end of each of the last n months (the current month uses "ref"), oldest first.
+  function netWorthSeries(state, n, ref) {
+    const d = parseDate(ref), out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const end = i === 0 ? ref : isoDate(new Date(d.getFullYear(), d.getMonth() - i + 1, 0));
+      out.push({ month: end.slice(0, 7), date: end, ...netWorth(state, end) });
+    }
+    return out;
+  }
+
+  // Assets grouped by kind, in the main currency, biggest first (debts left out).
+  function allocation(state, date) {
+    const { main, rates } = state.settings;
+    const m = new Map();
+    for (const a of state.assets || []) {
+      if (a.kind === "debt") continue;
+      const v = convert(assetValueAt(a, date), a.currency, main, rates) || 0;
+      if (v > 0) m.set(a.kind, (m.get(a.kind) || 0) + v);
+    }
+    const total = [...m.values()].reduce((x, y) => x + y, 0);
+    return [...m].map(([kind, value]) => ({ kind, value, pct: total ? Math.round((value / total) * 100) : 0 })).sort((a, b) => b.value - a.value);
+  }
+
   /* ---------- categories ---------- */
   function slug(name) {
     return String(name).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "category";
@@ -347,6 +454,7 @@
       transfers: [],
       budgets: {},
       recurring: [],
+      assets: [],
     };
   }
 
@@ -381,7 +489,17 @@
     if (s.budgets && typeof s.budgets === "object") for (const [k, v] of Object.entries(s.budgets)) if (Number.isSafeInteger(v) && v > 0 && categories.some((c) => c.id === k && c.type === "expense")) budgets[k] = v;
     const partial = { settings, categories, accounts };
     const recurring = Array.isArray(s.recurring) ? s.recurring.filter((r) => r && r.id && validateRecurring(r, partial).length === 0) : [];
-    return { schema: SCHEMA, settings, categories, accounts, entries, transfers, budgets, recurring };
+    const assets = Array.isArray(s.assets) ? s.assets.filter((a) => a && a.id && a.name && ASSET_KINDS.includes(a.kind) && CURRENCIES.includes(a.currency) && Array.isArray(a.values))
+      .map((a) => {
+        const values = a.values.filter((v) => v && isDay(v.date) && Number.isSafeInteger(v.value) && v.value >= 0).sort((x, y) => (x.date < y.date ? -1 : 1));
+        const out = { id: a.id, name: a.name, kind: a.kind, currency: a.currency, values };
+        if (Number.isSafeInteger(a.cost) && a.cost >= 0) out.cost = a.cost;
+        if (typeof a.note === "string" && a.note) out.note = a.note;
+        return out;
+      }).filter((a) => a.values.length) : [];
+    // A link to an asset that no longer exists is dropped; the entry stays.
+    entries = entries.map((e) => { if (e.asset == null || assets.some((a) => a.id === e.asset)) return e; const c = { ...e }; delete c.asset; return c; });
+    return { schema: SCHEMA, settings, categories, accounts, entries, transfers, budgets, recurring, assets };
   }
 
   let seq = 0;
@@ -417,6 +535,7 @@
     addCategory, emptyState, loadState, newId, toCsv,
     ACCOUNT_KINDS, DEFAULT_ACCOUNTS, validateTransfer, accountBalances, balancesByCurrency, totalBalance, addAccount, accountInUse,
     budgetStatus, dueDates, runRecurring, validateRecurring, monthlySeries, toBackup, parseBackup,
+    ASSET_KINDS, addAsset, setAssetValue, assetValueAt, assetFlows, assetStats, netWorth, netWorthSeries, allocation,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ASEF = api;

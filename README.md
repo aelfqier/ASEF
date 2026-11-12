@@ -31,9 +31,19 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
 - Plan tab: income and expenses over the last 6 months, budgets and repeating entries.
 - Backup file (save to Drive, WhatsApp or email) and restore, with undo.
 
+## Step 3
+
+- Wealth tab: net worth (cash in accounts, plus assets, minus debts) in the main currency, what it was at
+  the end of each of the last 12 months, and how your assets split by type.
+- Assets of every kind (property, land, gold, stocks, crypto, savings, vehicle, business, other), each in
+  MAD, EUR or USD, with a value history: update the value whenever it changes.
+- What you paid, so you see the gain; income and costs linked to the asset (rent, dividends, upkeep),
+  so you see what it earns in a year and its yield.
+- Debts (loans, credit) with what's still owed and how much is paid off.
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)
 2. Accounts (cash, bank, wallets) and transfers, monthly budgets, repeating entries, charts, backup (done)
-3. Assets and net worth: value over time and the income each asset brings in
+3. Assets and net worth: value over time and the income each asset brings in (done)
 4. Side hustles, savings goals, French and Arabic, store release
