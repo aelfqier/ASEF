@@ -11,12 +11,15 @@
   const ASSET_KIND = { property: "Property", land: "Land", gold: "Gold", stocks: "Stocks", crypto: "Crypto", savings: "Savings", vehicle: "Vehicle", business: "Business", other: "Other", debt: "Debt" };
 
   let state = L.emptyState();
-  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false };
+  const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false, hustle: null, item: null };
 
   const save = () => S.write(state);
   const cat = (id) => state.categories.find((c) => c.id === id) || { name: id, type: "expense" };
   const acc = (id) => state.accounts.find((a) => a.id === id) || { name: "?", currency: "MAD" };
   const assetById = (id) => state.assets.find((a) => a.id === id);
+  const hustleById = (id) => state.hustles.find((h) => h.id === id);
+  const goalById = (id) => state.goals.find((g) => g.id === id);
+  const monthName = (ym) => { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
   const money = (c, cur, o) => L.formatMoney(c, cur || state.settings.main, o);
   const amountText = (cents) => (cents / 100).toFixed(2);
 
@@ -43,7 +46,8 @@
       dot = el("span", "dot", cat(e.category).name.slice(0, 1).toUpperCase());
       mid.append(el("span", "row-title", cat(e.category).name));
       const linked = e.asset && assetById(e.asset);
-      const sub = [state.accounts.length > 1 ? acc(e.account).name : "", linked ? "◆ " + linked.name : "", e.recurring ? "↻" : "", e.note].filter(Boolean).join(" · ");
+      const hs = e.hustle && hustleById(e.hustle);
+      const sub = [state.accounts.length > 1 ? acc(e.account).name : "", linked ? "◆ " + linked.name : "", hs ? "⚡ " + hs.name : "", e.recurring ? "↻" : "", e.note].filter(Boolean).join(" · ");
       if (sub) mid.append(el("span", "row-note", sub));
       amt = el("span", "row-amt", L.formatMoney(L.signed(e), e.currency, { sign: true }));
     }
@@ -195,6 +199,36 @@
       ch.append(col);
     }
 
+    const gl = $("goalList"); gl.replaceChildren();
+    if (!state.goals.length) gl.append(el("p", "empty", "Save for something: an emergency fund, a car, a house deposit."));
+    for (const g of state.goals) {
+      const st = L.goalStatus(state, g, t);
+      const b = el("button", "goal budget" + (st.done ? " done" : "")); b.type = "button";
+      const head = el("div", "budget-head");
+      head.append(el("strong", null, g.name), el("span", "muted", st.done ? "Reached ✓" : `${st.pct}%`));
+      const bar = el("div", "bar"); const fill = el("i"); fill.style.width = `${Math.max(2, st.pct)}%`; bar.append(fill);
+      const m = (c) => L.formatMoney(c, g.currency);
+      const foot = st.done ? `${m(st.saved)} saved` : st.late ? `${m(st.saved)} of ${m(g.target)} · the date has passed`
+        : st.perMonth ? `${m(st.saved)} of ${m(g.target)} · ${m(st.perMonth)} a month to make it` : `${m(st.saved)} of ${m(g.target)}`;
+      b.append(head, bar, el("div", "budget-foot", foot));
+      b.addEventListener("click", () => openItem("goal", g.id));
+      gl.append(b);
+    }
+
+    const hl = $("hustleList"); hl.replaceChildren();
+    if (!state.hustles.length) hl.append(el("p", "empty", "Track what each side hustle really earns after its costs."));
+    for (const h of state.hustles) {
+      const st = L.hustleStats(state, h, t);
+      const r = el("button", "row hustle"); r.type = "button";
+      const mid = el("span", "row-mid");
+      mid.append(el("span", "row-title", h.name), el("span", "row-note", `All time ${money(st.all.balance, null, { sign: true })}${st.goalPct != null ? ` · ${st.goalPct}% of monthly goal` : ""}`));
+      const right = el("span", "row-mid right");
+      right.append(el("span", "row-amt" + (st.month.balance < 0 ? " neg" : ""), money(st.month.balance, null, { sign: true })), el("span", "row-note", "this month"));
+      r.append(el("span", "dot", "⚡"), mid, right);
+      r.addEventListener("click", () => openItem("hustle", h.id));
+      hl.append(r);
+    }
+
     const alloc = L.allocation(state, t);
     $("allocCard").hidden = !alloc.length;
     const al = $("alloc"); al.replaceChildren();
@@ -325,6 +359,131 @@
       state.assets.splice(at, 0, a);
       state.entries = state.entries.map((e) => (links.includes(e.id) ? { ...e, asset: a.id } : e));
       save(); render();
+    });
+  }
+
+  /* ---------- goals and side hustles sheet ---------- */
+  function openItem(kind, id) {
+    ui.item = { kind, id: id || null };
+    for (const x of ["hustleForm", "goalForm", "hustleView", "goalView"]) $(x).hidden = true;
+    $("hErr").hidden = $("gErr").hidden = true;
+    if (!id && kind === "hustle") {
+      $("iTitle").textContent = "New side hustle";
+      $("hName").value = ""; $("hGoal").value = ""; $("hStart").value = L.today();
+      $("hustleForm").hidden = false;
+    } else if (!id && kind === "goal") {
+      $("iTitle").textContent = "New savings goal";
+      $("gName").value = ""; $("gTarget").value = ""; $("gDeadline").value = "";
+      $("gCur").value = state.settings.main;
+      fillGoalAccounts();
+      $("goalForm").hidden = false;
+    } else if (kind === "hustle") { $("hustleView").hidden = false; renderHustleView(); }
+    else { $("goalView").hidden = false; renderGoalView(); }
+    if (!$("itemSheet").open) $("itemSheet").showModal();
+  }
+
+  function fillGoalAccounts() {
+    const cur = $("gCur").value;
+    fillSelect($("gAccount"), [["", "Money I put aside"], ...state.accounts.filter((a) => a.currency === cur).map((a) => [a.id, `${a.name} balance`])]);
+  }
+
+  function stats(box, items) {
+    box.replaceChildren();
+    for (const [label, value, sub] of items) { const d = el("div", "stat"); d.append(el("span", null, label), el("strong", null, value)); if (sub) d.append(el("em", null, sub)); box.append(d); }
+  }
+
+  function renderHustleView() {
+    const h = hustleById(ui.item.id); if (!h) return;
+    const st = L.hustleStats(state, h, L.today());
+    $("iTitle").textContent = h.name;
+    const items = [
+      ["This month", money(st.month.balance, null, { sign: true }), `${money(st.month.income)} in · ${money(st.month.expense)} costs`],
+      ["Average, last 3 months", money(st.avg3, null, { sign: true }), "profit a month"],
+      ["All time", money(st.all.balance, null, { sign: true }), `since ${dayLabel(h.start)}`],
+      ["Return on costs", st.roi != null ? `${st.roi > 0 ? "+" : ""}${st.roi}%` : "—", st.best ? `best month ${monthName(st.best.month)}` : "profit ÷ what you spent"],
+    ];
+    if (h.goal) items.push(["Monthly goal", `${st.goalPct}%`, `${money(st.month.balance)} of ${money(h.goal)}`]);
+    stats($("hStats"), items);
+    const max = Math.max(1, ...st.series.map((m) => Math.abs(m.net)));
+    const ch = $("hChart"); ch.replaceChildren();
+    for (const m of st.series) {
+      const col = el("div", "col"), bars = el("div", "bars");
+      const bar = el("i", m.net < 0 ? "neg" : ""); bar.style.height = `${(Math.abs(m.net) / max) * 100}%`; bar.title = money(m.net);
+      bars.append(bar);
+      col.append(bars, el("span", "col-m", MONTHS[Number(m.month.slice(5)) - 1].slice(0, 3)));
+      ch.append(col);
+    }
+    const flows = L.sortEntries(state.entries.filter((e) => e.hustle === h.id)).slice(0, 8);
+    fillList($("hFlows"), flows, "Nothing yet. When you add income or costs, pick this side hustle.");
+    for (const r of $("hFlows").querySelectorAll(".row")) r.addEventListener("click", () => $("itemSheet").close(), { capture: true });
+  }
+
+  function renderGoalView() {
+    const g = goalById(ui.item.id); if (!g) return;
+    const t = L.today(), st = L.goalStatus(state, g, t);
+    const m = (c) => L.formatMoney(c, g.currency);
+    $("iTitle").textContent = g.name;
+    $("gPct").textContent = st.done ? "Reached ✓" : `${st.pct}%`;
+    $("gBar").style.width = `${Math.max(2, st.pct)}%`;
+    $("gLine").textContent = `${m(st.saved)} of ${m(g.target)}${g.account ? ` · following ${acc(g.account).name}` : ""}`;
+    const items = [["Still to save", m(st.left)]];
+    if (g.deadline) items.push(st.late ? ["Target date", dayLabel(g.deadline), "has passed"] : ["Each month", st.perMonth ? m(st.perMonth) : m(0), `for ${st.monthsLeft} month${st.monthsLeft === 1 ? "" : "s"}, by ${dayLabel(g.deadline)}`]);
+    stats($("gStats"), items);
+    $("saveForm").hidden = !!g.account;
+    $("sAmount").value = ""; $("sDate").value = t;
+    const h = $("sHistory"); h.replaceChildren();
+    for (const x of g.saved.slice().sort((a, b) => (a.date < b.date ? 1 : -1))) {
+      const row = el("div"); row.append(el("span", null, dayLabel(x.date)), el("span", null, L.formatMoney(x.amount, g.currency, { sign: true }))); h.append(row);
+    }
+  }
+
+  function wireItems() {
+    $("addGoalBtn").addEventListener("click", () => openItem("goal"));
+    $("addHustleBtn").addEventListener("click", () => openItem("hustle"));
+    $("closeItem").addEventListener("click", () => $("itemSheet").close());
+    $("gCur").addEventListener("change", fillGoalAccounts);
+    $("hustleForm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const goalRaw = $("hGoal").value.trim();
+      const r = L.addHustle(state.hustles, { name: $("hName").value, start: $("hStart").value, goal: goalRaw ? L.parseAmount(goalRaw) : undefined });
+      if (r.error) { $("hErr").textContent = { name: "Type a name.", start: "Pick the start date.", goal: "The goal isn't a number.", exists: "You already have one with that name." }[r.error]; $("hErr").hidden = false; return; }
+      state.hustles = r.hustles; save(); $("itemSheet").close(); render(); toast("Side hustle added");
+    });
+    $("goalForm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const r = L.addGoal(state.goals, { name: $("gName").value, target: L.parseAmount($("gTarget").value), currency: $("gCur").value,
+        deadline: $("gDeadline").value || undefined, account: $("gAccount").value || undefined }, state.accounts);
+      if (r.error) { $("gErr").textContent = { name: "Name your goal.", target: "Enter the amount to reach.", deadline: "Pick a date.", exists: "You already have a goal with that name." }[r.error] || "Check the details."; $("gErr").hidden = false; return; }
+      state.goals = r.goals; save(); $("itemSheet").close(); render(); toast("Goal added");
+    });
+    $("saveForm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const g = goalById(ui.item.id); if (!g) return;
+      const raw = $("sAmount").value.trim(), neg = raw.startsWith("-");
+      const v = L.parseAmount(raw.replace(/^-/, ""));
+      if (!v || !L.isDay($("sDate").value)) { toast("Type the amount first"); return; }
+      const item = { date: $("sDate").value, amount: neg ? -v : v };
+      g.saved.push(item); save(); renderGoalView(); render();
+      toast(`${L.formatMoney(item.amount, g.currency, { sign: true })} to ${g.name}`, () => { g.saved = g.saved.filter((x) => x !== item); save(); renderGoalView(); render(); });
+    });
+    $("delGoal").addEventListener("click", () => {
+      const g = goalById(ui.item.id); if (!g) return;
+      const at = state.goals.indexOf(g);
+      state.goals = state.goals.filter((x) => x !== g); save(); $("itemSheet").close(); render();
+      toast(`${g.name} deleted`, () => { state.goals.splice(at, 0, g); save(); render(); });
+    });
+    $("delHustle").addEventListener("click", () => {
+      const h = hustleById(ui.item.id); if (!h) return;
+      const at = state.hustles.indexOf(h);
+      const links = state.entries.filter((e) => e.hustle === h.id).map((e) => e.id);
+      state.hustles = state.hustles.filter((x) => x !== h);
+      state.entries = state.entries.map((e) => { if (e.hustle !== h.id) return e; const c = { ...e }; delete c.hustle; return c; });
+      save(); $("itemSheet").close(); render();
+      toast(`${h.name} deleted, its entries stay`, () => {
+        state.hustles.splice(at, 0, h);
+        state.entries = state.entries.map((e) => (links.includes(e.id) ? { ...e, hustle: h.id } : e));
+        save(); render();
+      });
     });
   }
 
@@ -493,6 +652,13 @@
       b.addEventListener("click", () => { ui.asset = a.id; renderSheetChoices(); });
       ac.append(b);
     }
+    $("hustleBox").hidden = transfer || !state.hustles.length;
+    const hc = $("hustleChips"); hc.replaceChildren();
+    for (const h of [{ id: null, name: "None" }, ...state.hustles]) {
+      const b = el("button", "chip" + (h.id === ui.hustle ? " on" : ""), h.name); b.type = "button";
+      b.addEventListener("click", () => { ui.hustle = h.id; if (h.id && ui.type === "income" && !ui.category) ui.category = "side-hustle"; renderSheetChoices(); });
+      hc.append(b);
+    }
     const chips = $("catChips"); chips.replaceChildren();
     for (const c of state.categories.filter((x) => x.type === ui.type)) {
       const b = el("button", "chip" + (c.id === ui.category ? " on" : ""), c.name); b.type = "button";
@@ -514,6 +680,7 @@
     ui.to = item && item.to ? item.to : null;
     ui.category = item && !isTransfer ? item.category : null;
     ui.asset = item && item.asset ? item.asset : null;
+    ui.hustle = item && item.hustle ? item.hustle : null;
     $("sheetTitle").textContent = item ? (isTransfer ? "Edit transfer" : "Edit entry") : "New entry";
     $("fAmount").value = item ? amountText(item.amount) : "";
     $("fReceived").value = item && isTransfer && item.received !== item.amount ? amountText(item.received) : "";
@@ -557,6 +724,7 @@
     if (editing && editing.recurring) draft.recurring = editing.recurring;
     const linked = ui.asset && assetById(ui.asset);
     if (linked && (draft.type === "expense" || linked.kind !== "debt")) draft.asset = linked.id;
+    if (ui.hustle && hustleById(ui.hustle)) draft.hustle = ui.hustle;
     const errs = L.validateEntry(draft, state.categories, state.accounts);
     $("amountErr").hidden = !errs.includes("amount");
     $("catErr").hidden = !errs.includes("category");
@@ -607,6 +775,7 @@
     $("nextPeriod").addEventListener("click", () => { ui.ref = L.shiftPeriod(ui.period, ui.ref, 1); renderHistory(); });
 
     // Wealth
+    wireItems();
     $("addAssetBtn").addEventListener("click", () => openAsset(null, false));
     $("addDebtBtn").addEventListener("click", () => openAsset(null, true));
     $("closeAsset").addEventListener("click", () => $("assetSheet").close());

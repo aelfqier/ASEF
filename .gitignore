@@ -8,3 +8,7 @@ ios/App/App/public/
 android/app/src/main/assets/public/
 .DS_Store
 e2e-shots/
+android/keystore.properties
+*.jks
+*.keystore
+!android/app/debug.keystore

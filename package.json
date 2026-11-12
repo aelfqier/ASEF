@@ -1,6 +1,6 @@
 {
   "name": "asef",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "ASEF: track daily income, expenses and balance in MAD, EUR and USD, and build wealth.",
   "scripts": {
@@ -8,7 +8,8 @@
     "start": "python3 -m http.server 8080 -d www",
     "sync": "cap sync",
     "android": "cap open android",
-    "ios": "cap open ios"
+    "ios": "cap open ios",
+    "assets": "capacitor-assets generate --iconBackgroundColor \"#8a0303\" --iconBackgroundColorDark \"#8a0303\" --splashBackgroundColor \"#0a0a0a\" --splashBackgroundColorDark \"#0a0a0a\""
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",
@@ -19,6 +20,7 @@
     "@capacitor/share": "^8.0.3"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.5.3"
   }
 }

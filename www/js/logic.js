@@ -3,7 +3,7 @@
 (function (root) {
   "use strict";
 
-  const SCHEMA = 3;
+  const SCHEMA = 4;
   const CURRENCIES = ["MAD", "EUR", "USD"];
   const SYMBOLS = { MAD: "MAD", EUR: "€", USD: "$" };
   // Value of one unit in MAD. Starting guesses only: the user updates them in Settings.
@@ -92,6 +92,7 @@
       if (!a) errs.push("account"); else if (a.currency !== e.currency) errs.push("currency");
     }
     if (e.asset != null && typeof e.asset !== "string") errs.push("asset");
+    if (e.hustle != null && typeof e.hustle !== "string") errs.push("hustle");
     if (!isDay(e.date)) errs.push("date");
     const cat = (categories || []).find((c) => c.id === e.category);
     if (!cat || cat.type !== e.type) errs.push("category");
@@ -429,6 +430,87 @@
     return [...m].map(([kind, value]) => ({ kind, value, pct: total ? Math.round((value / total) * 100) : 0 })).sort((a, b) => b.value - a.value);
   }
 
+  /* ---------- side hustles ---------- */
+  function addHustle(hustles, input) {
+    const i = input || {};
+    const name = String(i.name || "").trim();
+    if (!name) return { error: "name" };
+    if (!isDay(i.start)) return { error: "start" };
+    if (i.goal != null && (!Number.isSafeInteger(i.goal) || i.goal <= 0)) return { error: "goal" };
+    if (hustles.some((h) => h.name.toLowerCase() === name.toLowerCase())) return { error: "exists" };
+    let id = `hustle-${slug(name)}`, n = 2;
+    while (hustles.some((h) => h.id === id)) id = `hustle-${slug(name)}-${n++}`;
+    const h = { id, name, start: i.start };
+    if (i.goal != null) h.goal = i.goal;
+    return { hustles: [...hustles, h], id };
+  }
+
+  // Money a side hustle brought in and cost, in the main currency.
+  function hustleStats(state, hustle, today) {
+    const { main, rates } = state.settings;
+    const mine = state.entries.filter((e) => e.hustle === hustle.id);
+    const sum = (list) => totalIn(list, main, rates);
+    const all = sum(mine);
+    const month = sum(inPeriod(mine, "month", today));
+    const series = monthlySeries(mine, 6, today, main, rates);
+    const best = monthlySeries(mine, Math.max(1, monthsBetween(hustle.start, today) + 1), today, main, rates)
+      .reduce((b, m) => (m.net > (b ? b.net : -Infinity) ? m : b), null);
+    // Return on what was spent: profit per 100 spent, when anything was spent.
+    const roi = all.expense > 0 ? Math.round((all.balance / all.expense) * 1000) / 10 : null;
+    const last3 = series.slice(-3).reduce((x, m) => x + m.net, 0);
+    return { all, month, series, best: best && best.net > 0 ? best : null, roi, avg3: Math.round(last3 / 3), goalPct: hustle.goal ? Math.round((month.balance / hustle.goal) * 100) : null };
+  }
+
+  function monthsBetween(a, b) {
+    const x = parseDate(a), y = parseDate(b);
+    return Math.max(0, (y.getFullYear() - x.getFullYear()) * 12 + y.getMonth() - x.getMonth());
+  }
+
+  /* ---------- savings goals ---------- */
+  // A goal either follows an account's balance (e.g. a savings account) or adds up money put aside by hand.
+  function addGoal(goals, input, accounts) {
+    const i = input || {};
+    const name = String(i.name || "").trim();
+    if (!name) return { error: "name" };
+    if (!Number.isSafeInteger(i.target) || i.target <= 0) return { error: "target" };
+    if (!CURRENCIES.includes(i.currency)) return { error: "currency" };
+    if (i.deadline != null && !isDay(i.deadline)) return { error: "deadline" };
+    if (i.account != null) {
+      const a = (accounts || []).find((x) => x.id === i.account);
+      if (!a) return { error: "account" };
+      if (a.currency !== i.currency) return { error: "currency" };
+    }
+    if (goals.some((g) => g.name.toLowerCase() === name.toLowerCase())) return { error: "exists" };
+    let id = `goal-${slug(name)}`, n = 2;
+    while (goals.some((g) => g.id === id)) id = `goal-${slug(name)}-${n++}`;
+    const g = { id, name, target: i.target, currency: i.currency, saved: [] };
+    if (i.deadline) g.deadline = i.deadline;
+    if (i.account) g.account = i.account;
+    return { goals: [...goals, g], id };
+  }
+
+  function goalSaved(state, goal) {
+    if (goal.account) return accountBalances(state)[goal.account] || 0;
+    return goal.saved.reduce((x, s) => x + s.amount, 0);
+  }
+
+  // How far a goal is, and how much to put aside each month to make the deadline.
+  function goalStatus(state, goal, today) {
+    const saved = goalSaved(state, goal);
+    const left = Math.max(0, goal.target - saved);
+    const pct = Math.min(100, Math.max(0, Math.round((saved / goal.target) * 100)));
+    let monthsLeft = null, perMonth = null, late = false;
+    if (goal.deadline) {
+      if (goal.deadline < today) late = left > 0;
+      else {
+        const t = parseDate(today), d = parseDate(goal.deadline);
+        monthsLeft = Math.max(1, (d.getFullYear() - t.getFullYear()) * 12 + d.getMonth() - t.getMonth() + (d.getDate() >= t.getDate() ? 0 : -1) + 1);
+        perMonth = Math.ceil(left / monthsLeft);
+      }
+    }
+    return { saved, left, pct, done: left === 0, monthsLeft, perMonth, late };
+  }
+
   /* ---------- categories ---------- */
   function slug(name) {
     return String(name).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "category";
@@ -455,6 +537,8 @@
       budgets: {},
       recurring: [],
       assets: [],
+      hustles: [],
+      goals: [],
     };
   }
 
@@ -499,7 +583,18 @@
       }).filter((a) => a.values.length) : [];
     // A link to an asset that no longer exists is dropped; the entry stays.
     entries = entries.map((e) => { if (e.asset == null || assets.some((a) => a.id === e.asset)) return e; const c = { ...e }; delete c.asset; return c; });
-    return { schema: SCHEMA, settings, categories, accounts, entries, transfers, budgets, recurring, assets };
+    const hustles = Array.isArray(s.hustles) ? s.hustles.filter((h) => h && h.id && h.name && isDay(h.start))
+      .map((h) => { const o = { id: h.id, name: h.name, start: h.start }; if (Number.isSafeInteger(h.goal) && h.goal > 0) o.goal = h.goal; return o; }) : [];
+    entries = entries.map((e) => { if (e.hustle == null || hustles.some((h) => h.id === e.hustle)) return e; const c = { ...e }; delete c.hustle; return c; });
+    const goals = Array.isArray(s.goals) ? s.goals.filter((g) => g && g.id && g.name && Number.isSafeInteger(g.target) && g.target > 0 && CURRENCIES.includes(g.currency))
+      .map((g) => {
+        const o = { id: g.id, name: g.name, target: g.target, currency: g.currency,
+          saved: Array.isArray(g.saved) ? g.saved.filter((x) => x && isDay(x.date) && Number.isSafeInteger(x.amount)) : [] };
+        if (isDay(g.deadline)) o.deadline = g.deadline;
+        if (g.account && accounts.some((a) => a.id === g.account && a.currency === g.currency)) o.account = g.account;
+        return o;
+      }) : [];
+    return { schema: SCHEMA, settings, categories, accounts, entries, transfers, budgets, recurring, assets, hustles, goals };
   }
 
   let seq = 0;
@@ -535,6 +630,7 @@
     addCategory, emptyState, loadState, newId, toCsv,
     ACCOUNT_KINDS, DEFAULT_ACCOUNTS, validateTransfer, accountBalances, balancesByCurrency, totalBalance, addAccount, accountInUse,
     budgetStatus, dueDates, runRecurring, validateRecurring, monthlySeries, toBackup, parseBackup,
+    addHustle, hustleStats, addGoal, goalSaved, goalStatus,
     ASSET_KINDS, addAsset, setAssetValue, assetValueAt, assetFlows, assetStats, netWorth, netWorthSeries, allocation,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

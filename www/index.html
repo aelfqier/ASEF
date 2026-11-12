@@ -7,10 +7,11 @@
 <meta name="theme-color" content="#0a0a0a">
 <title>ASEF</title>
 <link rel="stylesheet" href="css/app.css">
+<link rel="icon" href="icon.png">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="mark" aria-hidden="true">A</span><span>ASEF</span></div>
+  <div class="brand"><img class="mark" src="icon.png" alt="" width="30" height="30"><span>ASEF</span></div>
   <div class="top-date" id="topDate"></div>
 </header>
 
@@ -89,6 +90,14 @@
     <div class="card">
       <div class="card-head"><h2>Last 12 months</h2><span class="muted">End of each month</span></div>
       <div id="nwChart" class="chart nw"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Savings goals</h2><button class="link" id="addGoalBtn">+ Add goal</button></div>
+      <div id="goalList" class="goals"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Side hustles</h2><button class="link" id="addHustleBtn">+ Add</button></div>
+      <div id="hustleList" class="list"></div>
     </div>
     <div class="card" id="allocCard" hidden>
       <h2>What you own</h2>
@@ -184,6 +193,11 @@
       </div>
       <input type="file" id="backupFile" accept=".json,application/json" hidden>
     </div>
+    <div class="card about">
+      <h2>About ASEF</h2>
+      <p class="muted">Version 1.0.0</p>
+      <p class="muted">Private by design: no account, no ads, no tracking. Everything you enter stays on this phone, and only leaves it when you save a backup or export a file yourself. Uninstalling the app deletes it.</p>
+    </div>
   </section>
 </main>
 
@@ -227,6 +241,10 @@
       <div class="field-label">Linked asset <span class="muted-i">(optional: rent, dividends, upkeep)</span></div>
       <div class="chips" id="assetChips"></div>
     </div>
+    <div id="hustleBox" hidden>
+      <div class="field-label">Side hustle <span class="muted-i">(optional)</span></div>
+      <div class="chips" id="hustleChips"></div>
+    </div>
     <div class="row2">
       <label>Date<input type="date" id="fDate"></label>
       <label>Note<input id="fNote" maxlength="120" placeholder="Optional"></label>
@@ -267,6 +285,58 @@
     <div class="field-label" id="aFlowsLabel">Linked income and costs</div>
     <div id="aFlows" class="list"></div>
     <div class="sheet-actions"><button type="button" class="btn danger ghost" id="delAsset">Delete</button></div>
+  </div>
+</dialog>
+
+<dialog id="itemSheet" class="sheet">
+  <div class="sheet-head">
+    <h2 id="iTitle"></h2>
+    <button type="button" class="icon-btn" id="closeItem" aria-label="Close">✕</button>
+  </div>
+  <form id="hustleForm" novalidate hidden>
+    <div class="grid2">
+      <label class="span2">Name<input id="hName" maxlength="40" placeholder="e.g. Logo design, Taxi, Online shop"></label>
+      <label>Started<input type="date" id="hStart"></label>
+      <label>Monthly profit goal <span class="muted-i">(optional)</span><input id="hGoal" inputmode="decimal" placeholder="0.00"></label>
+    </div>
+    <p class="muted small">Then pick this side hustle when you add its income and costs.</p>
+    <div class="err" id="hErr" hidden></div>
+    <button class="btn wide" type="submit">Save</button>
+  </form>
+  <form id="goalForm" novalidate hidden>
+    <div class="grid2">
+      <label class="span2">Goal<input id="gName" maxlength="40" placeholder="e.g. Emergency fund, Car, Hajj"></label>
+      <label>Target<input id="gTarget" inputmode="decimal" placeholder="0.00"></label>
+      <label>Currency<select id="gCur"><option>MAD</option><option>EUR</option><option>USD</option></select></label>
+      <label>By <span class="muted-i">(optional)</span><input type="date" id="gDeadline"></label>
+      <label>Track<select id="gAccount"></select></label>
+    </div>
+    <p class="muted small">Pick an account to follow its balance, or "Money I put aside" to add savings by hand.</p>
+    <div class="err" id="gErr" hidden></div>
+    <button class="btn wide" type="submit">Save</button>
+  </form>
+  <div id="hustleView" hidden>
+    <div class="stats" id="hStats"></div>
+    <div class="field-label">Profit, last 6 months</div>
+    <div id="hChart" class="chart small-chart"></div>
+    <div class="field-label">Latest</div>
+    <div id="hFlows" class="list"></div>
+    <div class="sheet-actions"><button type="button" class="btn danger ghost" id="delHustle">Delete</button></div>
+  </div>
+  <div id="goalView" hidden>
+    <div class="goal-big">
+      <div class="goal-pct" id="gPct"></div>
+      <div class="bar big"><i id="gBar"></i></div>
+      <div class="muted" id="gLine"></div>
+    </div>
+    <div class="stats" id="gStats"></div>
+    <form id="saveForm" class="inline-form value-form">
+      <input id="sAmount" inputmode="decimal" placeholder="Amount">
+      <input type="date" id="sDate">
+      <button class="btn small" type="submit">Add</button>
+    </form>
+    <div id="sHistory" class="hist"></div>
+    <div class="sheet-actions"><button type="button" class="btn danger ghost" id="delGoal">Delete</button></div>
   </div>
 </dialog>
 

@@ -294,3 +294,61 @@ test("saved assets are cleaned and broken asset links dropped", () => {
   assert.ok(back.categories.some((c) => c.id === "rent-in"));
   assert.deepEqual(L.parseBackup(L.toBackup(back)), back);
 });
+
+/* ---------- step 4 ---------- */
+test("side hustles: profit this month, all time, best month and return", () => {
+  const s = world();
+  let r = L.addHustle(s.hustles, { name: "Logo design", start: "2026-08-01", goal: 300000 });
+  s.hustles = r.hustles;
+  assert.equal(r.id, "hustle-logo-design");
+  assert.equal(L.addHustle(s.hustles, { name: "logo design", start: "2026-08-01" }).error, "exists");
+  assert.equal(L.addHustle(s.hustles, { name: "X", start: "nope" }).error, "start");
+  const h = { hustle: r.id, account: "cash" };
+  s.entries.push(
+    e({ ...h, type: "expense", category: "shopping", amount: 100000, date: "2026-08-03" }),
+    e({ ...h, type: "income", category: "side-hustle", amount: 50000, date: "2026-09-10" }),
+    e({ ...h, type: "income", category: "side-hustle", amount: 250000, date: "2026-10-10" }),
+    e({ ...h, type: "income", category: "side-hustle", amount: 150000, date: "2026-11-05" }),
+    e({ account: "cash", type: "income", category: "salary", amount: 999999, date: "2026-11-05" }),
+  );
+  const st = L.hustleStats(s, s.hustles[0], "2026-11-10");
+  assert.deepEqual(st.all, { income: 450000, expense: 100000, balance: 350000 });
+  assert.equal(st.month.balance, 150000);
+  assert.equal(st.best.month, "2026-10");
+  assert.equal(st.roi, 350);
+  assert.equal(st.avg3, Math.round((50000 + 250000 + 150000) / 3));
+  assert.equal(st.goalPct, 50);
+});
+
+test("savings goals by hand: progress and monthly amount to the deadline", () => {
+  const s = world();
+  const r = L.addGoal(s.goals, { name: "Emergency fund", target: 3000000, currency: "MAD", deadline: "2027-04-30" }, s.accounts);
+  s.goals = r.goals;
+  s.goals[0].saved.push({ date: "2026-11-01", amount: 600000 });
+  const g = L.goalStatus(s, s.goals[0], "2026-11-10");
+  assert.deepEqual(g, { saved: 600000, left: 2400000, pct: 20, done: false, monthsLeft: 6, perMonth: 400000, late: false });
+  assert.equal(L.goalStatus(s, s.goals[0], "2027-05-02").late, true);
+  s.goals[0].saved.push({ date: "2026-12-01", amount: 2500000 });
+  assert.deepEqual([L.goalStatus(s, s.goals[0], "2026-12-02").done, L.goalStatus(s, s.goals[0], "2026-12-02").pct], [true, 100]);
+});
+
+test("savings goals can follow an account's balance", () => {
+  const s = world();
+  assert.equal(L.addGoal([], { name: "Trip", target: 100, currency: "EUR", account: "bank" }, s.accounts).error, "currency");
+  const r = L.addGoal([], { name: "House deposit", target: 10000000, currency: "MAD", account: "bank" }, s.accounts);
+  s.goals = r.goals;
+  assert.equal(L.goalStatus(s, s.goals[0], "2026-11-10").saved, 500000);
+  assert.equal(L.goalStatus(s, s.goals[0], "2026-11-10").perMonth, null);
+});
+
+test("hustles and goals survive saving; broken links dropped", () => {
+  const s = world();
+  s.hustles = L.addHustle([], { name: "Taxi", start: "2026-01-01" }).hustles;
+  s.goals = L.addGoal([], { name: "Car", target: 5000, currency: "MAD", account: "bank" }, s.accounts).goals;
+  s.entries.push(e({ id: "h1", account: "cash", hustle: "hustle-taxi" }), e({ id: "h2", account: "cash", hustle: "gone" }));
+  const back = L.loadState(JSON.parse(JSON.stringify(s)));
+  assert.equal(back.hustles.length, 1);
+  assert.equal(back.goals[0].account, "bank");
+  assert.equal(back.entries.find((x) => x.id === "h1").hustle, "hustle-taxi");
+  assert.equal("hustle" in back.entries.find((x) => x.id === "h2"), false);
+});

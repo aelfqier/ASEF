@@ -41,9 +41,18 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
   so you see what it earns in a year and its yield.
 - Debts (loans, credit) with what's still owed and how much is paid off.
 
+## Step 4
+
+- Side hustles: link income and costs to a side hustle and see its profit this month, its 3-month average,
+  all time, return on costs, best month and an optional monthly profit goal.
+- Savings goals: a target, an optional date, and either an account to follow (its balance is the progress)
+  or money put aside by hand. Shows how much to save each month to make the date.
+- Store readiness: app icon and splash screen (`assets/`), version 1.0.0, release signing setup,
+  [privacy policy](PRIVACY.md), [store listing text](store/listing.md) and the [release guide](RELEASE.md).
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)
 2. Accounts (cash, bank, wallets) and transfers, monthly budgets, repeating entries, charts, backup (done)
 3. Assets and net worth: value over time and the income each asset brings in (done)
-4. Side hustles, savings goals, French and Arabic, store release
+4. Side hustles, savings goals, store readiness (done; English only)
