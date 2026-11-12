@@ -50,6 +50,19 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
 - Store readiness: app icon and splash screen (`assets/`), version 1.0.0, release signing setup,
   [privacy policy](PRIVACY.md), [store listing text](store/listing.md) and the [release guide](RELEASE.md).
 
+## App lock and automatic backup
+
+- PIN lock (4 to 6 digits). Only a salted PBKDF2-SHA-256 hash is stored, never the PIN. Wrong PINs slow down
+  after the fourth try (30 s, doubling, up to 15 minutes), even across restarts. Locks again when you leave the
+  app (right away, after 1 or 5 minutes). Fingerprint or Face ID through `@capgo/capacitor-native-biometric`
+  when the phone has it. The lock is never put in backup files, and restoring a backup keeps this phone's lock.
+  Forgot PIN: erase the app's data and restore a backup file.
+- Daily copies: the first time ASEF opens each day it keeps a copy of the data; the last 7 can be restored from
+  Settings (with undo).
+- Cloud: Android Auto Backup sends ASEF's saved data to the user's Google Drive and restores it on a new phone
+  (`res/xml/backup_rules.xml`, `res/xml/data_extraction_rules.xml`); on iPhone it is part of iCloud Backup.
+- A weekly reminder on Home to save a backup file, until one is saved.
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)

@@ -26,6 +26,11 @@
       <div class="cur-row" id="curRow"></div>
     </div>
 
+    <div class="banner" id="backupBanner" hidden>
+      <span id="backupBannerText"></span>
+      <button class="btn small" id="bannerBackup">Save backup</button>
+    </div>
+
     <div class="card">
       <div class="card-head"><h2>Accounts</h2><button class="link" id="transferBtn">Transfer</button></div>
       <div class="acc-row" id="accRow"></div>
@@ -151,6 +156,34 @@
 
   <!-- Settings -->
   <section class="view" id="view-settings" data-view="settings" hidden>
+    <div class="card">
+      <h2>Security</h2>
+      <div class="setting">
+        <div><strong>Lock with a PIN</strong><p class="muted" id="lockState">Off. Anyone holding your phone can open ASEF.</p></div>
+        <button class="switch" id="lockSwitch" role="switch" aria-checked="false"><i></i></button>
+      </div>
+      <div id="lockOptions" hidden>
+        <div class="setting" id="bioRow" hidden>
+          <div><strong id="bioLabel">Unlock with fingerprint</strong><p class="muted">Your PIN still works.</p></div>
+          <button class="switch" id="bioSwitch" role="switch" aria-checked="false"><i></i></button>
+        </div>
+        <div class="setting">
+          <div><strong>Lock again</strong><p class="muted">After you leave the app</p></div>
+          <select id="lockAfter"><option value="0">Right away</option><option value="60">After 1 minute</option><option value="300">After 5 minutes</option></select>
+        </div>
+        <button class="btn ghost small" id="changePin">Change PIN</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Automatic backup</h2>
+      <p class="muted" id="cloudNote"></p>
+      <div class="field-label">Daily copies on this phone</div>
+      <div id="snapList" class="list"></div>
+      <div class="setting">
+        <div><strong>Remind me to save a backup file</strong><p class="muted" id="lastBackupNote">Once a week, on the Home screen.</p></div>
+        <button class="switch" id="remindSwitch" role="switch" aria-checked="true"><i></i></button>
+      </div>
+    </div>
     <div class="card">
       <h2>Accounts</h2>
       <p class="muted">Cash, bank accounts and wallets. The starting balance is what the account holds today.</p>
@@ -339,6 +372,24 @@
     <div class="sheet-actions"><button type="button" class="btn danger ghost" id="delGoal">Delete</button></div>
   </div>
 </dialog>
+
+<div class="lock" id="lockScreen" hidden>
+  <img src="icon.png" alt="" class="lock-logo" width="72" height="72">
+  <h2 id="padTitle">Enter your PIN</h2>
+  <div class="dots" id="padDots"></div>
+  <div class="pad-msg" id="padMsg"></div>
+  <div class="pad" id="pad">
+    <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+    <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+    <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+    <button data-k="bio" id="padBio" aria-label="Use fingerprint">◉</button><button data-k="0">0</button><button data-k="del" aria-label="Delete">⌫</button>
+  </div>
+  <div class="pad-foot">
+    <button class="link" id="padOk" hidden>OK</button>
+    <button class="link" id="padCancel" hidden>Cancel</button>
+    <button class="link muted-link" id="padForgot">Forgot PIN?</button>
+  </div>
+</div>
 
 <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastUndo">Undo</button></div>
 

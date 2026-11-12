@@ -91,6 +91,9 @@
     $("heroBalance").classList.toggle("long", $("heroBalance").textContent.length > 13);
     const all = L.totalIn(state.entries, main, rates);
     $("heroSub").textContent = state.entries.length ? `${money(all.income)} in · ${money(all.expense)} out, all time` : "Add your first income or expense with +";
+    const bt = backupBannerText();
+    $("backupBanner").hidden = !bt;
+    if (bt) $("backupBannerText").textContent = bt;
     const nwBtn = $("heroNw");
     nwBtn.hidden = !state.assets.length;
     if (state.assets.length) {
@@ -557,6 +560,15 @@
 
   /* ---------- settings ---------- */
   function renderSettings() {
+    const lock = state.settings.lock;
+    $("lockSwitch").setAttribute("aria-checked", String(!!lock));
+    $("lockState").textContent = lock ? "On. ASEF asks for your PIN when you open it." : "Off. Anyone holding your phone can open ASEF.";
+    $("lockOptions").hidden = !lock;
+    $("bioRow").hidden = !lock || !pad.bioName;
+    if (pad.bioName) $("bioLabel").textContent = `Unlock with ${pad.bioName}`;
+    $("bioSwitch").setAttribute("aria-checked", String(!!(lock && lock.bio)));
+    $("lockAfter").value = String(state.settings.lockAfter || 0);
+    renderBackupSettings();
     const bal = L.accountBalances(state);
     const al = $("accList"); al.replaceChildren();
     for (const a of state.accounts) {
@@ -744,6 +756,197 @@
     toast(gone.from ? "Transfer deleted" : "Entry deleted", () => { state[key].push(gone); save(); render(); });
   }
 
+  /* ---------- app lock ---------- */
+  const pad = { mode: null, pin: "", first: null, after: null, bioName: null, hiddenAt: 0, leaving: 0 };
+  const lockOn = () => !!state.settings.lock;
+
+  function showPad(mode, title, after) {
+    pad.mode = mode; pad.pin = ""; pad.after = after || null;
+    $("padTitle").textContent = title;
+    $("padMsg").textContent = "";
+    const unlock = mode === "unlock";
+    $("padCancel").hidden = unlock;
+    $("padForgot").hidden = !unlock;
+    $("padBio").classList.toggle("blank", !(unlock && state.settings.lock && state.settings.lock.bio && pad.bioName));
+    $("padBio").setAttribute("aria-label", `Use ${pad.bioName || "fingerprint"}`);
+    document.body.classList.toggle("locked", unlock);
+    $("lockScreen").hidden = false;
+    if ($("sheet").open) $("sheet").close();
+    for (const d of ["assetSheet", "itemSheet"]) if ($(d).open) $(d).close();
+    drawDots();
+    if (unlock) { waitMessage(); if (!$("padBio").classList.contains("blank")) tryBiometry(); }
+  }
+
+  function hidePad() {
+    pad.mode = null; pad.pin = ""; pad.first = null;
+    $("lockScreen").hidden = true;
+    document.body.classList.remove("locked");
+  }
+
+  function drawDots() {
+    const box = $("padDots"); box.replaceChildren();
+    for (let i = 0; i < Math.max(4, pad.pin.length); i++) box.append(el("i", i < pad.pin.length ? "on" : ""));
+    $("padOk").hidden = pad.pin.length < 4;
+  }
+
+  function padMessage(text, shake) {
+    $("padMsg").textContent = text;
+    if (shake) { const d = $("padDots"); d.classList.remove("shake"); void d.offsetWidth; d.classList.add("shake"); }
+  }
+
+  // While wrong PINs are being punished, say how long is left.
+  function waitMessage() {
+    const left = Math.ceil(((state.settings.lockUntil || 0) - Date.now()) / 1000);
+    for (const b of $("pad").querySelectorAll("button:not(#padBio)")) b.disabled = left > 0;
+    if (left > 0) { padMessage(`Too many tries. Wait ${left} s.`); setTimeout(waitMessage, 1000); }
+    else if (/^Too many/.test($("padMsg").textContent)) padMessage("");
+  }
+
+  async function tryBiometry() {
+    if (await S.verifyBiometry()) { state.settings.lockFails = 0; save(); hidePad(); }
+  }
+
+  async function submitPad() {
+    const pin = pad.pin;
+    if (pad.mode === "unlock") {
+      if ((state.settings.lockUntil || 0) > Date.now()) return;
+      if (await L.checkPin(state.settings.lock, pin)) { state.settings.lockFails = 0; state.settings.lockUntil = 0; save(); hidePad(); return; }
+      const fails = (state.settings.lockFails || 0) + 1;
+      state.settings.lockFails = fails;
+      state.settings.lockUntil = Date.now() + L.lockoutSeconds(fails) * 1000;
+      save();
+      pad.pin = ""; drawDots();
+      padMessage("Wrong PIN", true);
+      waitMessage();
+      return;
+    }
+    if (pad.mode === "verify") {
+      if (await L.checkPin(state.settings.lock, pin)) { const next = pad.after; hidePad(); if (next) next(); }
+      else { pad.pin = ""; drawDots(); padMessage("Wrong PIN", true); }
+      return;
+    }
+    if (pad.mode === "set1") {
+      if (!L.validPin(pin)) { padMessage("Use 4 to 6 digits"); return; }
+      pad.first = pin;
+      const first = pin;
+      showPad("set2", "Enter the same PIN again");
+      pad.first = first;
+      return;
+    }
+    if (pad.mode === "set2") {
+      if (pin !== pad.first) { showPad("set1", "Choose a PIN (4 to 6 digits)"); padMessage("The two PINs didn't match. Start again.", true); return; }
+      const lock = await L.makeLock(pin);
+      lock.bio = !!(state.settings.lock && state.settings.lock.bio);
+      state.settings.lock = lock;
+      state.settings.lockFails = 0; state.settings.lockUntil = 0;
+      save(); hidePad(); render();
+      toast("PIN lock is on. Don't forget your PIN.");
+    }
+  }
+
+  function padKey(k) {
+    if (k === "bio") { tryBiometry(); return; }
+    if (k === "del") pad.pin = pad.pin.slice(0, -1);
+    else if (pad.pin.length < 6) pad.pin += k;
+    padMessage("");
+    drawDots();
+    // Setting a PIN waits for OK (it may be 4, 5 or 6 digits); six digits is always complete.
+    if (pad.pin.length === 6) submitPad();
+  }
+
+  function forgotPin() {
+    if (!confirm("Without your PIN, the only way in is to erase everything ASEF keeps on this phone, including its daily copies. You can then restore a backup file you saved. Erase?")) return;
+    if (!confirm("Erase all ASEF data on this phone now? This can't be undone.")) return;
+    state = L.emptyState();
+    save(); S.writeSnapshots([]);
+    hidePad(); render();
+    toast("Erased. Restore a backup file from Settings if you have one.");
+  }
+
+  function wireLock() {
+    for (const b of $("pad").querySelectorAll("button")) b.addEventListener("click", () => padKey(b.dataset.k));
+    $("padOk").addEventListener("click", submitPad);
+    $("padCancel").addEventListener("click", () => { hidePad(); render(); });
+    $("padForgot").addEventListener("click", forgotPin);
+    document.addEventListener("keydown", (ev) => {
+      if (!pad.mode) return;
+      if (/^\d$/.test(ev.key)) padKey(ev.key);
+      else if (ev.key === "Backspace") padKey("del");
+      else if (ev.key === "Enter" && pad.pin.length >= 4) submitPad();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { pad.hiddenAt = Date.now(); return; }
+      // Back from a share sheet or file picker ASEF just opened: don't ask for the PIN for that.
+      if (pad.leaving && Date.now() - pad.leaving < 120000) { pad.leaving = 0; return; }
+      pad.leaving = 0;
+      const wait = (state.settings.lockAfter || 0) * 1000;
+      if (lockOn() && pad.mode !== "unlock" && Date.now() - pad.hiddenAt >= wait) showPad("unlock", "Enter your PIN");
+    });
+    $("lockSwitch").addEventListener("click", () => {
+      if (!lockOn()) { showPad("set1", "Choose a PIN (4 to 6 digits)"); return; }
+      showPad("verify", "Enter your PIN to turn the lock off", () => {
+        delete state.settings.lock; state.settings.lockFails = 0; state.settings.lockUntil = 0;
+        save(); render(); toast("PIN lock is off");
+      });
+    });
+    $("changePin").addEventListener("click", () => showPad("verify", "Enter your current PIN", () => showPad("set1", "Choose a new PIN (4 to 6 digits)")));
+    $("bioSwitch").addEventListener("click", async () => {
+      const l = state.settings.lock; if (!l) return;
+      if (!l.bio && !(await S.verifyBiometry())) { toast(`${pad.bioName} didn't confirm. Try again.`); return; }
+      l.bio = !l.bio; save(); renderSettings();
+    });
+    $("lockAfter").addEventListener("change", (ev) => { state.settings.lockAfter = Number(ev.target.value); save(); });
+    $("remindSwitch").addEventListener("click", () => { state.settings.backupReminder = !state.settings.backupReminder; save(); renderSettings(); });
+    $("bannerBackup").addEventListener("click", saveBackup);
+  }
+
+  /* ---------- backups ---------- */
+  const daysSince = (iso) => Math.round((L.parseDate(L.today()) - L.parseDate(iso)) / 864e5);
+
+  async function saveBackup() {
+    pad.leaving = Date.now();
+    try { await S.saveFile(`asef-backup-${L.today()}.json`, L.toBackup(state), "application/json"); }
+    catch (e) { toast("The backup file couldn't be saved"); return; }
+    state.settings.lastBackup = L.today(); save(); render();
+  }
+
+  function backupBannerText() {
+    const st = state.settings;
+    if (!st.backupReminder || state.entries.length + state.assets.length < 5) return null;
+    if (!st.lastBackup) return "You haven't saved a backup file yet.";
+    const d = daysSince(st.lastBackup);
+    return d >= 7 ? `Your last backup file is ${d} days old.` : null;
+  }
+
+  async function renderBackupSettings() {
+    const plat = S.platform;
+    $("cloudNote").textContent = plat === "android"
+      ? "Your phone also backs up ASEF to your Google Drive by itself, about once a day while charging on Wi-Fi, if Backup is on in your phone's settings (Settings › Google › Backup). It comes back when you install ASEF on a new phone with the same Google account."
+      : plat === "ios"
+        ? "ASEF is included in your iPhone's iCloud Backup (Settings › your name › iCloud › iCloud Backup), and comes back when you restore a new iPhone from it."
+        : "On a phone, ASEF is also backed up by Google Drive (Android) or iCloud Backup (iPhone) automatically.";
+    const box = $("snapList"); box.replaceChildren();
+    const snaps = await S.readSnapshots();
+    if (!snaps.length) box.append(el("p", "empty", "A copy is kept each day you open ASEF, for 7 days."));
+    for (const snap of snaps) {
+      const row = el("div", "row static");
+      const mid = el("span", "row-mid");
+      const n = (snap.data.entries || []).length;
+      mid.append(el("span", "row-title", dayLabel(snap.date)), el("span", "row-note", `${n} ${n === 1 ? "entry" : "entries"}, as the day began`));
+      const b = el("button", "snap-btn", "Restore"); b.type = "button";
+      b.addEventListener("click", () => {
+        if (!confirm(`Go back to ASEF as it was at the start of ${dayLabel(snap.date)}? Anything added since then is replaced.`)) return;
+        const before = state;
+        state = L.restoreKeepingLock(state, snap.data); save(); render();
+        toast(`Restored ${dayLabel(snap.date)}`, () => { state = before; save(); render(); });
+      });
+      row.append(el("span", "dot", "↺"), mid, b);
+      box.append(row);
+    }
+    $("remindSwitch").setAttribute("aria-checked", String(!!state.settings.backupReminder));
+    $("lastBackupNote").textContent = state.settings.lastBackup ? `Last backup file: ${dayLabel(state.settings.lastBackup)}.` : "Once a week, on the Home screen. No backup file saved yet.";
+  }
+
   /* ---------- toast ---------- */
   let toastTimer = null, undoFn = null;
   function toast(text, undo) {
@@ -834,9 +1037,9 @@
       if (r.error) { toast(r.error === "exists" ? "That category already exists" : "Type a name first"); return; }
       state.categories = r.categories; $("catName").value = ""; save(); renderSettings();
     });
-    $("exportCsv").addEventListener("click", () => S.saveFile(`asef-${L.today()}.csv`, L.toCsv(state.entries, state.categories, state.accounts), "text/csv"));
-    $("exportBackup").addEventListener("click", () => S.saveFile(`asef-backup-${L.today()}.json`, L.toBackup(state), "application/json"));
-    $("importBackup").addEventListener("click", () => $("backupFile").click());
+    $("exportCsv").addEventListener("click", () => (pad.leaving = Date.now()) && S.saveFile(`asef-${L.today()}.csv`, L.toCsv(state.entries, state.categories, state.accounts), "text/csv"));
+    $("exportBackup").addEventListener("click", saveBackup);
+    $("importBackup").addEventListener("click", () => { pad.leaving = Date.now(); $("backupFile").click(); });
     $("backupFile").addEventListener("change", async (ev) => {
       const f = ev.target.files && ev.target.files[0]; ev.target.value = "";
       if (!f) return;
@@ -845,7 +1048,7 @@
       const n = next.entries.length + next.transfers.length;
       if (!confirm(`Replace what's on this phone with the backup (${n} entries, ${next.accounts.length} accounts)?`)) return;
       const before = state;
-      state = next; save(); render();
+      state = L.restoreKeepingLock(state, next); save(); render();
       toast("Backup restored", () => { state = before; save(); render(); });
     });
     $("toastUndo").addEventListener("click", () => { const f = undoFn; $("toast").hidden = true; undoFn = null; if (f) f(); });
@@ -853,7 +1056,13 @@
 
   async function start() {
     wire();
+    wireLock();
     state = L.loadState(await S.read());
+    pad.bioName = await S.biometryAvailable();
+    if (lockOn()) showPad("unlock", "Enter your PIN");
+    // One copy of the data each day, kept for a week, to roll back a mistake.
+    const snaps = await S.readSnapshots();
+    if (!L.hasSnapshot(snaps, L.today())) await S.writeSnapshots(L.addSnapshot(snaps, L.today(), state, 7));
     const added = L.runRecurring(state, L.today());
     save();
     render();

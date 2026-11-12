@@ -529,7 +529,7 @@
   function emptyState() {
     return {
       schema: SCHEMA,
-      settings: { main: "MAD", rates: { ...DEFAULT_RATES } },
+      settings: { main: "MAD", rates: { ...DEFAULT_RATES }, backupReminder: true },
       categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
       accounts: DEFAULT_ACCOUNTS.map((a) => ({ ...a })),
       entries: [],
@@ -554,6 +554,10 @@
     for (const c of CURRENCIES) { const r = Number(settings.rates && settings.rates[c]); if (r > 0) rates[c] = r; }
     rates.MAD = 1;
     settings.rates = rates;
+    if (!isLock(settings.lock)) delete settings.lock;
+    else settings.lock = { salt: settings.lock.salt, iter: settings.lock.iter, hash: settings.lock.hash, bio: !!settings.lock.bio };
+    if (!isDay(settings.lastBackup)) delete settings.lastBackup;
+    settings.backupReminder = settings.backupReminder !== false;
     const categories = Array.isArray(s.categories) && s.categories.length ? s.categories.filter((c) => c && c.id && c.name && (c.type === "income" || c.type === "expense")) : base.categories;
     // Any built-in category that went missing comes back, so old entries always have a home.
     for (const d of DEFAULT_CATEGORIES) if (!categories.some((c) => c.id === d.id)) categories.push({ ...d });
@@ -609,9 +613,69 @@
     return rows.map((r) => r.map(q).join(",")).join("\n") + "\n";
   }
 
+  /* ---------- app lock ---------- */
+  const PIN_ITERATIONS = 120000;
+  const validPin = (pin) => typeof pin === "string" && /^\d{4,6}$/.test(pin);
+  const toB64 = (bytes) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
+  const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const subtle = () => (typeof crypto !== "undefined" && crypto.subtle) || null;
+
+  // The PIN itself is never stored: only a salted PBKDF2-SHA-256 hash of it.
+  async function hashPin(pin, saltB64, iterations) {
+    const c = subtle(); if (!c) throw new Error("crypto unavailable");
+    const key = await c.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+    const bits = await c.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: fromB64(saltB64), iterations }, key, 256);
+    return toB64(new Uint8Array(bits));
+  }
+
+  async function makeLock(pin, iterations) {
+    if (!validPin(pin)) return null;
+    const salt = new Uint8Array(16); crypto.getRandomValues(salt);
+    const iter = iterations || PIN_ITERATIONS;
+    const saltB64 = toB64(salt);
+    return { salt: saltB64, iter, hash: await hashPin(pin, saltB64, iter), bio: false };
+  }
+
+  async function checkPin(lock, pin) {
+    if (!lock || !validPin(pin)) return false;
+    const h = await hashPin(pin, lock.salt, lock.iter);
+    // Compare every character, so timing doesn't hint at how much matched.
+    let diff = h.length ^ lock.hash.length;
+    for (let i = 0; i < Math.max(h.length, lock.hash.length); i++) diff |= (h.charCodeAt(i) || 0) ^ (lock.hash.charCodeAt(i) || 0);
+    return diff === 0;
+  }
+
+  // Seconds to wait after repeated wrong PINs: none for the first 4, then 30 s doubling, at most 15 minutes.
+  const lockoutSeconds = (fails) => (fails < 5 ? 0 : Math.min(900, 30 * 2 ** (fails - 5)));
+
+  const isLock = (l) => !!l && typeof l.salt === "string" && typeof l.hash === "string" && Number.isSafeInteger(l.iter) && l.iter >= 10000;
+
+  /* ---------- automatic snapshots ---------- */
+  // Keeps one copy of the data per day, the newest "keep" days, newest first.
+  function addSnapshot(list, date, state, keep) {
+    const k = keep || 7;
+    const others = (Array.isArray(list) ? list : []).filter((x) => x && x.date !== date);
+    return [{ date, data: withoutLock(state) }, ...others].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, k);
+  }
+
+  const hasSnapshot = (list, date) => Array.isArray(list) && list.some((x) => x && x.date === date);
+
+  function withoutLock(state) {
+    const settings = { ...state.settings };
+    delete settings.lock;
+    return { ...state, settings };
+  }
+
+  // Bringing back a backup or snapshot never changes the lock on this phone.
+  function restoreKeepingLock(current, incoming) {
+    const next = loadState(incoming);
+    if (current.settings.lock) next.settings.lock = current.settings.lock; else delete next.settings.lock;
+    return next;
+  }
+
   /* ---------- backup ---------- */
   function toBackup(state) {
-    return JSON.stringify({ app: "asef", exported: new Date().toISOString(), ...state }, null, 1);
+    return JSON.stringify({ app: "asef", exported: new Date().toISOString(), ...withoutLock(state) }, null, 1);
   }
 
   // Returns a clean state from a backup file's text, or null when it isn't an ASEF backup.
@@ -630,6 +694,7 @@
     addCategory, emptyState, loadState, newId, toCsv,
     ACCOUNT_KINDS, DEFAULT_ACCOUNTS, validateTransfer, accountBalances, balancesByCurrency, totalBalance, addAccount, accountInUse,
     budgetStatus, dueDates, runRecurring, validateRecurring, monthlySeries, toBackup, parseBackup,
+    validPin, hashPin, makeLock, checkPin, lockoutSeconds, addSnapshot, hasSnapshot, withoutLock, restoreKeepingLock,
     addHustle, hustleStats, addGoal, goalSaved, goalStatus,
     ASSET_KINDS, addAsset, setAssetValue, assetValueAt, assetFlows, assetStats, netWorth, netWorthSeries, allocation,
   };

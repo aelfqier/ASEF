@@ -352,3 +352,60 @@ test("hustles and goals survive saving; broken links dropped", () => {
   assert.equal(back.entries.find((x) => x.id === "h1").hustle, "hustle-taxi");
   assert.equal("hustle" in back.entries.find((x) => x.id === "h2"), false);
 });
+
+/* ---------- app lock and snapshots ---------- */
+test("PIN lock stores only a salted hash and checks PINs", async () => {
+  assert.equal(L.validPin("12a4"), false);
+  assert.equal(L.validPin("123"), false);
+  assert.equal(L.validPin("1234567"), false);
+  assert.equal(await L.makeLock("12"), null);
+  const lock = await L.makeLock("4821", 20000);
+  assert.ok(!JSON.stringify(lock).includes("4821"));
+  assert.equal(await L.checkPin(lock, "4821"), true);
+  assert.equal(await L.checkPin(lock, "4822"), false);
+  assert.equal(await L.checkPin(lock, ""), false);
+  const other = await L.makeLock("4821", 20000);
+  assert.notEqual(other.hash, lock.hash); // different salt, different hash
+});
+
+test("wrong PINs slow down after the fourth", () => {
+  assert.deepEqual([0, 4, 5, 6, 7, 20].map(L.lockoutSeconds), [0, 0, 30, 60, 120, 900]);
+});
+
+test("the lock stays on this phone: not in backups, not replaced by a restore", async () => {
+  const s = L.emptyState();
+  s.settings.lock = await L.makeLock("1111", 20000);
+  const kept = L.loadState(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual(kept.settings.lock, s.settings.lock);
+  const file = L.toBackup(s);
+  assert.ok(!file.includes(s.settings.lock.hash));
+  const other = L.emptyState(); other.settings.lock = await L.makeLock("2222", 20000); other.entries.push(e({ account: "cash" }));
+  const restored = L.restoreKeepingLock(s, JSON.parse(L.toBackup(other)));
+  assert.deepEqual(restored.settings.lock, s.settings.lock);
+  assert.equal(restored.entries.length, 1);
+  const unlocked = L.restoreKeepingLock(L.emptyState(), other);
+  assert.equal("lock" in unlocked.settings, false);
+  assert.equal("lock" in L.loadState({ settings: { lock: { salt: "x" } } }).settings, false);
+});
+
+test("daily snapshots: one per day, newest first, last 7 kept, no lock inside", async () => {
+  const s = L.emptyState();
+  s.settings.lock = await L.makeLock("1111", 20000);
+  let list = [];
+  for (let d = 1; d <= 9; d++) list = L.addSnapshot(list, `2026-11-0${d}`, s);
+  assert.deepEqual(list.map((x) => x.date), ["2026-11-09", "2026-11-08", "2026-11-07", "2026-11-06", "2026-11-05", "2026-11-04", "2026-11-03"]);
+  s.entries.push(e({ account: "cash" }));
+  list = L.addSnapshot(list, "2026-11-09", s);
+  assert.equal(list.length, 7);
+  assert.equal(list[0].data.entries.length, 1);
+  assert.equal("lock" in list[0].data.settings, false);
+  assert.equal(L.hasSnapshot(list, "2026-11-09"), true);
+  assert.equal(L.hasSnapshot(list, "2026-11-10"), false);
+});
+
+test("backup reminder setting defaults to on and remembers the last backup", () => {
+  assert.equal(L.loadState({}).settings.backupReminder, true);
+  assert.equal(L.loadState({ settings: { backupReminder: false, lastBackup: "2026-11-01" } }).settings.backupReminder, false);
+  assert.equal(L.loadState({ settings: { lastBackup: "2026-11-01" } }).settings.lastBackup, "2026-11-01");
+  assert.equal("lastBackup" in L.loadState({ settings: { lastBackup: "bad" } }).settings, false);
+});
