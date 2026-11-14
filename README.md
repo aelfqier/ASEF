@@ -77,7 +77,7 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
 
 ## Accounts (version 1.1.0)
 
-- Everyone logs in or creates an account (email and password, optional name) before using ASEF. Firebase
+- Everyone logs in or creates an account (email, optional name, and a password of at least 8 characters with a capital letter, a small letter, a number and a symbol) before using ASEF. Firebase
   Authentication handles it through its REST API, so there is no SDK: `www/js/config.js` holds the project's
   Web API key, and the calls are in `www/js/store.js` (`auth`).
 - Money data stays on the phone, kept apart for each account (`asef-data:<uid>`). Data saved before accounts

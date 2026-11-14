@@ -874,12 +874,19 @@
   const cleanEmail = (s) => String(s == null ? "" : s).trim().toLowerCase();
   const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleanEmail(s));
   // Returns what's wrong with a new password, or null when it's fine.
+  // Rule: at least 8 characters, with a capital letter, a small letter, a number and a symbol.
   function passwordProblem(p) {
     p = String(p == null ? "" : p);
-    if (p.length < 8) return "Use at least 8 characters.";
     if (p.length > 128) return "Use at most 128 characters.";
-    if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) return "Use letters and at least one number.";
-    return null;
+    const missing = [];
+    if (!/[A-Z]/.test(p)) missing.push("a capital letter");
+    if (!/[a-z]/.test(p)) missing.push("a small letter");
+    if (!/\d/.test(p)) missing.push("a number");
+    if (!/[^A-Za-z0-9\s]/.test(p)) missing.push("a symbol");
+    if (p.length < 8) missing.unshift("at least 8 characters");
+    if (!missing.length) return null;
+    const list = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`;
+    return `Add ${list}.`;
   }
   const AUTH_ERRORS = {
     EMAIL_EXISTS: "There is already an account with this email. Log in instead.",

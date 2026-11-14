@@ -528,10 +528,13 @@ test("accounts: email and password checks", () => {
   assert.ok(L.validEmail("me@mail.com"));
   assert.ok(!L.validEmail("me@mail"));
   assert.ok(!L.validEmail("me mail@x.com"));
-  assert.equal(L.passwordProblem("abc123"), "Use at least 8 characters.");
-  assert.equal(L.passwordProblem("abcdefgh"), "Use letters and at least one number.");
-  assert.equal(L.passwordProblem("12345678"), "Use letters and at least one number.");
-  assert.equal(L.passwordProblem("asef2026"), null);
+  assert.equal(L.passwordProblem("Ab1!"), "Add at least 8 characters.");
+  assert.equal(L.passwordProblem("abcdefgh"), "Add a capital letter, a number and a symbol.");
+  assert.equal(L.passwordProblem("ABCDEFG1!"), "Add a small letter.");
+  assert.equal(L.passwordProblem("Asef2026"), "Add a symbol.");
+  assert.equal(L.passwordProblem("Asef 2026"), "Add a symbol.");
+  assert.equal(L.passwordProblem(""), "Add at least 8 characters, a capital letter, a small letter, a number and a symbol.");
+  assert.equal(L.passwordProblem("Asef#2026"), null);
 });
 
 test("accounts: Firebase error codes become plain messages", () => {
