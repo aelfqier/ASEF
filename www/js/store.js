@@ -1,8 +1,12 @@
 /* ASEF: saves data on the phone (Capacitor Preferences), or in the browser's localStorage when run on the web. */
 (function (root) {
   "use strict";
-  const KEY = "asef-data";
-  const SNAP_KEY = "asef-snapshots";
+  // Before accounts, data lived under these keys. The first account to log in on the phone takes it over.
+  const LEGACY_KEY = "asef-data";
+  const LEGACY_SNAP_KEY = "asef-snapshots";
+  const SESSION_KEY = "asef-session";
+  let KEY = LEGACY_KEY;
+  let SNAP_KEY = LEGACY_SNAP_KEY;
   const cap = root.Capacitor;
   const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
   const Prefs = isNative && cap.Plugins && cap.Plugins.Preferences ? cap.Plugins.Preferences : null;
@@ -12,6 +16,83 @@
     try { return root.localStorage.getItem(key); } catch (_) { return null; }
   }
   const read = () => readKey(KEY);
+  async function writeKey(key, value) {
+    if (Prefs) await Prefs.set({ key, value }); else root.localStorage.setItem(key, value);
+  }
+  async function removeKey(key) {
+    try { if (Prefs) await Prefs.remove({ key }); else root.localStorage.removeItem(key); } catch (_) { /* nothing to remove */ }
+  }
+
+  /* Accounts: the login is kept on the phone; each account's data has its own keys. */
+  const A = root.ASEF;
+  async function readSession() { return A.parseSession(await readKey(SESSION_KEY)); }
+  async function writeSession(s) { if (s) await writeKey(SESSION_KEY, JSON.stringify(s)); else await removeKey(SESSION_KEY); }
+  // Points storage at this account. Data saved before accounts existed moves to the first account that logs in.
+  async function useAccount(uid) {
+    await chain;
+    KEY = A.dataKey(uid); SNAP_KEY = A.snapKey(uid);
+    const legacy = await readKey(LEGACY_KEY);
+    if (legacy != null) {
+      if ((await readKey(KEY)) == null) {
+        await writeKey(KEY, legacy);
+        const snaps = await readKey(LEGACY_SNAP_KEY);
+        if (snaps != null) await writeKey(SNAP_KEY, snaps);
+      }
+      await removeKey(LEGACY_KEY); await removeKey(LEGACY_SNAP_KEY);
+    }
+  }
+  async function forgetAccountData(uid) { await chain; await removeKey(A.dataKey(uid)); await removeKey(A.snapKey(uid)); }
+
+  const apiKey = () => String((root.ASEF_CONFIG && root.ASEF_CONFIG.firebaseApiKey) || "").trim();
+  async function postJson(url, body, form) {
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), 15000);
+    let r;
+    try {
+      r = await fetch(url, { method: "POST", signal: ctl ? ctl.signal : undefined,
+        headers: { "Content-Type": form ? "application/x-www-form-urlencoded" : "application/json" },
+        body: form ? new URLSearchParams(body).toString() : JSON.stringify(body) });
+    } catch (_) { const e = new Error("NETWORK"); e.code = "NETWORK"; throw e; }
+    finally { if (timer) clearTimeout(timer); }
+    let json = null; try { json = await r.json(); } catch (_) { /* empty answer */ }
+    if (!r.ok) { const e = new Error((json && json.error && json.error.message) || `HTTP ${r.status}`); e.code = e.message; throw e; }
+    return json || {};
+  }
+  function authCall(method, body) {
+    const key = apiKey();
+    if (!key) { const e = new Error("NOT_SET_UP"); e.code = "NOT_SET_UP"; return Promise.reject(e); }
+    return postJson(`${A.AUTH_URL}${method}?key=${encodeURIComponent(key)}`, body);
+  }
+  const auth = {
+    ready: () => !!apiKey(),
+    async register(email, password, name) {
+      const j = await authCall("signUp", { email, password, returnSecureToken: true });
+      let s = A.sessionFromAuth(j, Date.now());
+      if (name) {
+        try { const u = await authCall("update", { idToken: s.idToken, displayName: name, returnSecureToken: true }); s.name = String(u.displayName || name); }
+        catch (_) { s.name = name; }
+      }
+      authCall("sendOobCode", { requestType: "VERIFY_EMAIL", idToken: s.idToken }).catch(() => {});
+      return s;
+    },
+    async login(email, password) {
+      const j = await authCall("signInWithPassword", { email, password, returnSecureToken: true });
+      const s = A.sessionFromAuth(j, Date.now());
+      try { const info = await authCall("lookup", { idToken: s.idToken }); const u = info.users && info.users[0]; if (u) { s.verified = !!u.emailVerified; s.name = String(u.displayName || s.name || ""); } } catch (_) { /* optional */ }
+      return s;
+    },
+    resetPassword: (email) => authCall("sendOobCode", { requestType: "PASSWORD_RESET", email }),
+    async refresh(s) {
+      const key = apiKey();
+      if (!key) { const e = new Error("NOT_SET_UP"); e.code = "NOT_SET_UP"; throw e; }
+      const j = await postJson(`${A.TOKEN_URL}?key=${encodeURIComponent(key)}`, { grant_type: "refresh_token", refresh_token: s.refreshToken }, true);
+      const next = A.sessionFromRefresh(s, j, Date.now());
+      try { const info = await authCall("lookup", { idToken: next.idToken }); const u = info.users && info.users[0]; if (u) { next.verified = !!u.emailVerified; next.name = String(u.displayName || next.name || ""); } } catch (_) { /* optional */ }
+      return next;
+    },
+    resendVerification: (s) => authCall("sendOobCode", { requestType: "VERIFY_EMAIL", idToken: s.idToken }),
+    remove: (s) => authCall("delete", { idToken: s.idToken }),
+  };
 
   async function readSnapshots() {
     try { const v = JSON.parse(await readKey(SNAP_KEY)); return Array.isArray(v) ? v : []; } catch (_) { return []; }
@@ -44,8 +125,7 @@
   function write(state) {
     const value = JSON.stringify(state);
     chain = chain.then(async () => {
-      if (Prefs) await Prefs.set({ key: KEY, value });
-      else root.localStorage.setItem(KEY, value);
+      await writeKey(KEY, value);
     }).catch((e) => { console.error("ASEF save failed", e); });
     return chain;
   }
@@ -134,5 +214,6 @@
 
   const platform = isNative && cap.getPlatform ? cap.getPlatform() : "web";
   root.ASEFStore = { read, write, saveFile, isNative, platform, readSnapshots, writeSnapshots, biometryAvailable, verifyBiometry,
-    fetchJson, notifyPermission, scheduleReminders, onAppLink, saveBase64, canNotify: !!Notes };
+    fetchJson, notifyPermission, scheduleReminders, onAppLink, saveBase64, canNotify: !!Notes,
+    readSession, writeSession, useAccount, forgetAccountData, auth };
 })(typeof self !== "undefined" ? self : this);

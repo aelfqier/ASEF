@@ -49,10 +49,14 @@ Finance
 Everyone / 4+ (no user-generated content shared, no ads, no purchases)
 
 ## Data safety (Google Play) / App Privacy (App Store)
-- Data collected: none
+- Data collected: email address and name (optional), for account management only (Personal info). Stored by
+  Firebase Authentication. Not shared, not used for ads or analytics. Financial data: none collected (stays on the phone)
 - Data shared: none (live price lookups send only public coin or stock symbols, over HTTPS, and can be turned off)
-- Data in transit: encrypted (HTTPS); user data itself is never transmitted
-- Users can delete data by uninstalling the app
+- Data in transit: encrypted (HTTPS)
+- Account creation: email and password. Account deletion: in the app (Settings → Delete account); Google Play
+  also asks for a web link for deletion requests: use the privacy policy link (it explains how)
+- App Store: "Contact Info → Email Address" and "Name", linked to the user, used for App Functionality, no tracking
+- Review login: create a test account in the app and give its email and password to the reviewers
 
 ## Privacy policy URL
 https://github.com/aelfqier/ASEF/blob/claude/project-thread-f74ilo/PRIVACY.md

@@ -75,6 +75,25 @@ Built with Capacitor for Android and iOS, from plain HTML, CSS and JavaScript (n
 - Quick entry: Android home screen widget and long-press shortcuts, iPhone quick actions; they open
   `asef://add?type=expense|income`, which goes straight to the add sheet (after unlocking).
 
+## Accounts (version 1.1.0)
+
+- Everyone logs in or creates an account (email and password, optional name) before using ASEF. Firebase
+  Authentication handles it through its REST API, so there is no SDK: `www/js/config.js` holds the project's
+  Web API key, and the calls are in `www/js/store.js` (`auth`).
+- Money data stays on the phone, kept apart for each account (`asef-data:<uid>`). Data saved before accounts
+  moves to the first account that logs in. Logging out keeps it; logging back in brings it back.
+- Password reset by email, email confirmation, change password, log out, and delete account (asks for the
+  password again; deletes the account and its data on the phone).
+- The login is remembered and renewed quietly when online; no internet is needed to open the app once logged in.
+- Forgot PIN: the account password now turns the PIN off without erasing anything.
+
+### Setting up Firebase
+
+1. Create a project at console.firebase.google.com (Analytics not needed).
+2. Authentication → Sign-in method → turn on Email/Password.
+3. Project settings → copy the Web API Key into `www/js/config.js`, then `npx cap sync`.
+4. Optional: Authentication → Templates to change the sender name of reset and confirmation emails to ASEF.
+
 ## Plan
 
 1. Daily core: income, expenses, balance (done)

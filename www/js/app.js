@@ -13,8 +13,10 @@
   let state = L.emptyState();
   const ui = { view: "home", period: "month", ref: L.today(), editing: null, type: "expense", account: null, to: null, category: null, recType: "expense", asset: null, viewing: null, newDebt: false, hustle: null, item: null, reportMonth: null, pendingLink: null };
 
+  const account = { session: null, mode: "login", busy: false, wired: false };
   let remindTimer = null;
   const save = () => {
+    if (!account.session) return Promise.resolve(); // nothing is saved while logged out
     clearTimeout(remindTimer);
     remindTimer = setTimeout(() => scheduleReminders(false), 1500);
     return S.write(state);
@@ -587,6 +589,7 @@
 
   /* ---------- settings ---------- */
   function renderSettings() {
+    renderAccount();
     const lock = state.settings.lock;
     $("lockSwitch").setAttribute("aria-checked", String(!!lock));
     $("lockState").textContent = lock ? "On. ASEF asks for your PIN when you open it." : "Off. Anyone holding your phone can open ASEF.";
@@ -897,13 +900,19 @@
     if (pad.pin.length === 6) submitPad();
   }
 
+  // Forgot PIN: the account password removes the PIN (needs internet). Data stays.
   function forgotPin() {
-    if (!confirm("Without your PIN, the only way in is to erase everything ASEF keeps on this phone, including its daily copies. You can then restore a backup file you saved. Erase?")) return;
-    if (!confirm("Erase all ASEF data on this phone now? This can't be undone.")) return;
-    state = L.emptyState();
-    save(); S.writeSnapshots([]);
-    hidePad(); render();
-    toast("Erased. Restore a backup file from Settings if you have one.");
+    if (!account.session) return;
+    askPassword({
+      title: "Forgot your PIN?",
+      text: "Type your ASEF account password to turn the PIN off. Your data stays. You need internet for this.",
+      ok: "Turn PIN off",
+    }, async (pw) => {
+      await S.auth.login(account.session.email, pw);
+      delete state.settings.lock; state.settings.lockFails = 0; state.settings.lockUntil = 0;
+      save(); hidePad(); render();
+      toast("PIN turned off. You can set a new one in Settings.");
+    });
   }
 
   function wireLock() {
@@ -1175,7 +1184,7 @@
   function handleLink(url) {
     const link = L.parseAppLink(url);
     if (!link) return;
-    if (pad.mode === "unlock") { ui.pendingLink = link; return; } // after the PIN
+    if (!account.session || pad.mode === "unlock") { ui.pendingLink = link; return; } // after logging in or the PIN
     openSheet(null, link.type);
   }
 
@@ -1307,11 +1316,205 @@
     $("toastUndo").addEventListener("click", () => { const f = undoFn; $("toast").hidden = true; undoFn = null; if (f) f(); });
   }
 
+  /* ---------- accounts ---------- */
+  const initial = (s) => ((s.name || s.email || "?").trim()[0] || "?").toUpperCase();
+
+  function setAuthMode(mode) {
+    account.mode = mode;
+    const reg = mode === "register", reset = mode === "reset";
+    for (const b of $("authTabs").querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.mode === mode));
+    $("authTabs").hidden = reset;
+    $("authNameRow").hidden = !reg;
+    $("authPassRow").hidden = reset;
+    $("authHint").hidden = !reg;
+    $("authLegal").hidden = !reg;
+    $("authForgot").hidden = mode !== "login";
+    $("authBack").hidden = !reset;
+    $("authPass").setAttribute("autocomplete", reg ? "new-password" : "current-password");
+    $("authSubmit").textContent = reg ? "Create account" : reset ? "Send reset link" : "Log in";
+    $("authTag").textContent = reset ? "Type your email. We'll send you a link to choose a new password."
+      : reg ? "Create your free account to start tracking." : "Track every dirham, euro and dollar. Build wealth.";
+    authMessage("");
+  }
+  function authMessage(text, ok) { $("authMsg").textContent = text; $("authMsg").classList.toggle("ok", !!ok); }
+
+  function showAuth(mode, msg, ok) {
+    hidePadQuiet();
+    for (const d of ["sheet", "assetSheet", "itemSheet", "pwSheet"]) if ($(d).open) $(d).close();
+    document.body.classList.add("signed-out");
+    $("authScreen").hidden = false;
+    setAuthMode(mode || "login");
+    if (msg) authMessage(msg, ok);
+    if (!S.auth.ready()) authMessage(L.authMessage("NOT_SET_UP"));
+  }
+  function hidePadQuiet() { pad.mode = null; pad.pin = ""; $("lockScreen").hidden = true; document.body.classList.remove("locked"); }
+
+  async function submitAuth(ev) {
+    ev.preventDefault();
+    if (account.busy) return;
+    const mode = account.mode;
+    const email = L.cleanEmail($("authEmail").value), pw = $("authPass").value, name = $("authName").value.trim().slice(0, 60);
+    if (!L.validEmail(email)) { authMessage(L.authMessage("INVALID_EMAIL")); $("authEmail").focus(); return; }
+    if (mode !== "reset" && !pw) { authMessage(L.authMessage("MISSING_PASSWORD")); $("authPass").focus(); return; }
+    if (mode === "register") { const p = L.passwordProblem(pw); if (p) { authMessage(p); $("authPass").focus(); return; } }
+    account.busy = true; $("authSubmit").disabled = true;
+    const label = $("authSubmit").textContent;
+    $("authSubmit").textContent = mode === "register" ? "Creating account…" : mode === "reset" ? "Sending…" : "Logging in…";
+    try {
+      if (mode === "reset") {
+        await S.auth.resetPassword(email);
+        setAuthMode("login");
+        authMessage("If there's an account for this email, a reset link is on its way. Check your inbox.", true);
+        return;
+      }
+      const session = mode === "register" ? await S.auth.register(email, pw, name) : await S.auth.login(email, pw);
+      $("authPass").value = "";
+      await enterAccount(session);
+      if (mode === "register") toast(`Welcome to ASEF${session.name ? `, ${session.name}` : ""}! Check your inbox to confirm your email.`);
+    } catch (e) {
+      authMessage(L.authMessage(e));
+    } finally {
+      account.busy = false; $("authSubmit").disabled = false;
+      if (!$("authScreen").hidden) $("authSubmit").textContent = account.mode === mode ? label : $("authSubmit").textContent;
+    }
+  }
+
+  // Logged in: load this account's data on the phone, then carry on as before.
+  async function enterAccount(session) {
+    account.session = session;
+    await S.writeSession(session);
+    await S.useAccount(session.uid);
+    $("authScreen").hidden = true;
+    document.body.classList.remove("signed-out");
+    await openData();
+  }
+
+  function renderAccount() {
+    const s = account.session; if (!s) return;
+    $("acctAvatar").textContent = initial(s);
+    $("acctName").textContent = s.name || s.email.split("@")[0];
+    $("acctEmail").textContent = s.email;
+    $("acctVerify").hidden = !!s.verified;
+  }
+
+  async function logout(msg) {
+    clearTimeout(remindTimer);
+    await S.write(state); // the last changes, under this account
+    await S.scheduleReminders([], false); // this account's bill reminders stop
+    account.session = null;
+    await S.writeSession(null);
+    state = L.emptyState();
+    ui.view = "home";
+    $("authEmail").value = ""; $("authPass").value = ""; $("authName").value = "";
+    showAuth("login", msg || "You're logged out. Your data stays on this phone for when you log back in.", true);
+  }
+
+  function deleteAccount() {
+    const s = account.session; if (!s) return;
+    askPassword({
+      title: "Delete your account?",
+      text: "This deletes your ASEF account and everything ASEF keeps for it on this phone, including daily copies. It can't be undone. Save a backup file first if you may want your data later.",
+      ok: "Delete for good",
+      danger: true,
+    }, async (pw) => {
+      const fresh = await S.auth.login(s.email, pw); // also proves it's you
+      await S.auth.remove(fresh);
+      await S.scheduleReminders([], false);
+      await S.forgetAccountData(s.uid);
+      account.session = null;
+      await S.writeSession(null);
+      state = L.emptyState();
+      ui.view = "home";
+      $("authEmail").value = "";
+      showAuth("register", "Your account and its data have been deleted.", true);
+    });
+  }
+
+  // A small sheet asking for the account password. verify() throws to show an error and keep the sheet open.
+  let pwVerify = null;
+  function askPassword(o, verify) {
+    pwVerify = verify;
+    $("pwTitle").textContent = o.title;
+    $("pwText").textContent = o.text;
+    $("pwEmail").textContent = account.session ? account.session.email : "";
+    $("pwOk").textContent = o.ok;
+    $("pwOk").classList.toggle("danger-solid", !!o.danger);
+    $("pwInput").value = ""; $("pwMsg").textContent = "";
+    $("pwSheet").showModal();
+    setTimeout(() => $("pwInput").focus(), 50);
+  }
+  async function submitPassword(ev) {
+    ev.preventDefault();
+    const pw = $("pwInput").value, f = pwVerify;
+    if (!f) return;
+    if (!pw) { $("pwMsg").textContent = L.authMessage("MISSING_PASSWORD"); return; }
+    $("pwOk").disabled = true; $("pwMsg").textContent = "Checking…";
+    try {
+      await f(pw);
+      pwVerify = null;
+      if ($("pwSheet").open) $("pwSheet").close();
+    } catch (e) {
+      const c = L.authCode(e);
+      $("pwMsg").textContent = c === "INVALID_LOGIN_CREDENTIALS" || c === "INVALID_PASSWORD" ? "Wrong password." : L.authMessage(e);
+    } finally { $("pwOk").disabled = false; }
+  }
+
+  // Quietly renew the login when online. Only a login the server has ended logs you out; no internet is fine.
+  async function checkSession() {
+    const s = account.session; if (!s || !S.auth.ready()) return;
+    try {
+      const next = await S.auth.refresh(s);
+      if (account.session && account.session.uid === next.uid) { account.session = next; await S.writeSession(next); if (ui.view === "settings") renderAccount(); }
+    } catch (e) {
+      if (L.sessionGone(e) && account.session && account.session.uid === s.uid) await logout("Please log in again.");
+    }
+  }
+
+  function wireAccount() {
+    for (const b of $("authTabs").querySelectorAll("button")) b.addEventListener("click", () => setAuthMode(b.dataset.mode));
+    $("authForm").addEventListener("submit", submitAuth);
+    $("authForgot").addEventListener("click", () => setAuthMode("reset"));
+    $("authBack").addEventListener("click", () => setAuthMode("login"));
+    $("authEye").addEventListener("click", () => {
+      const show = $("authPass").type === "password";
+      $("authPass").type = show ? "text" : "password";
+      $("authEye").textContent = show ? "Hide" : "Show";
+      $("authEye").setAttribute("aria-label", show ? "Hide password" : "Show password");
+    });
+    $("authPrivacy").href = (window.ASEF_CONFIG && window.ASEF_CONFIG.privacyUrl) || "#";
+    $("acctLogout").addEventListener("click", () => { if (confirm("Log out of ASEF? Your data stays on this phone.")) logout(); });
+    $("acctDelete").addEventListener("click", deleteAccount);
+    $("acctReset").addEventListener("click", async () => {
+      try { await S.auth.resetPassword(account.session.email); toast(`Reset link sent to ${account.session.email}`); }
+      catch (e) { toast(L.authMessage(e)); }
+    });
+    $("acctResend").addEventListener("click", async () => {
+      try { await checkSession(); await S.auth.resendVerification(account.session); toast("Confirmation email sent"); }
+      catch (e) { toast(L.authMessage(e)); }
+    });
+    $("pwForm").addEventListener("submit", submitPassword);
+    for (const id of ["closePw", "pwCancel"]) $(id).addEventListener("click", () => { pwVerify = null; $("pwSheet").close(); });
+  }
+
   async function start() {
     wire();
     wireLock();
-    state = L.loadState(await S.read());
+    wireAccount();
     pad.bioName = await S.biometryAvailable();
+    S.onAppLink(handleLink);
+    // Prices again when coming back to the app after a while.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && account.session) { refreshPrices(false); checkSession(); } });
+    const session = await S.readSession();
+    if (!session) { showAuth("login"); return; }
+    account.session = session;
+    await S.useAccount(session.uid);
+    await openData();
+    checkSession();
+  }
+
+  // Everything that runs once this account's data is open.
+  async function openData() {
+    state = L.loadState(await S.read());
     if (lockOn()) showPad("unlock", "Enter your PIN");
     // One copy of the data each day, kept for a week, to roll back a mistake.
     const snaps = await S.readSnapshots();
@@ -1320,12 +1523,10 @@
     save();
     render();
     if (added) toast(`${added} repeating ${added === 1 ? "entry" : "entries"} added`);
-    S.onAppLink(handleLink);
     refreshPrices(false);
     // Ask for notification permission the first time there is a bill to remind about.
     scheduleReminders(state.settings.billReminders && state.recurring.some((r) => r.type === "expense"));
-    // Prices again when coming back to the app after a while.
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPrices(false); });
+    if (ui.pendingLink && !lockOn()) { const l = ui.pendingLink; ui.pendingLink = null; setTimeout(() => openSheet(null, l.type), 50); }
   }
   start();
 })();

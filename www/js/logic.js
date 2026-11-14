@@ -868,6 +868,73 @@
     return loadState(o);
   }
 
+  /* ---------- accounts (Firebase Authentication over its REST API) ---------- */
+  const AUTH_URL = "https://identitytoolkit.googleapis.com/v1/accounts:";
+  const TOKEN_URL = "https://securetoken.googleapis.com/v1/token";
+  const cleanEmail = (s) => String(s == null ? "" : s).trim().toLowerCase();
+  const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleanEmail(s));
+  // Returns what's wrong with a new password, or null when it's fine.
+  function passwordProblem(p) {
+    p = String(p == null ? "" : p);
+    if (p.length < 8) return "Use at least 8 characters.";
+    if (p.length > 128) return "Use at most 128 characters.";
+    if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) return "Use letters and at least one number.";
+    return null;
+  }
+  const AUTH_ERRORS = {
+    EMAIL_EXISTS: "There is already an account with this email. Log in instead.",
+    EMAIL_NOT_FOUND: "Wrong email or password.",
+    INVALID_PASSWORD: "Wrong email or password.",
+    INVALID_LOGIN_CREDENTIALS: "Wrong email or password.",
+    INVALID_EMAIL: "That email address doesn't look right.",
+    MISSING_PASSWORD: "Type your password.",
+    WEAK_PASSWORD: "Choose a stronger password.",
+    USER_DISABLED: "This account has been turned off.",
+    USER_NOT_FOUND: "This account no longer exists.",
+    TOO_MANY_ATTEMPTS_TRY_LATER: "Too many tries. Wait a few minutes and try again.",
+    OPERATION_NOT_ALLOWED: "Email sign-in isn't switched on for ASEF yet.",
+    TOKEN_EXPIRED: "Please log in again.",
+    INVALID_REFRESH_TOKEN: "Please log in again.",
+    CREDENTIAL_TOO_OLD_LOGIN_AGAIN: "Please log in again.",
+    INVALID_ID_TOKEN: "Please log in again.",
+    NETWORK: "No internet connection. Check it and try again.",
+    NOT_SET_UP: "Accounts aren't set up in this version of ASEF.",
+  };
+  // Firebase answers with codes like "WEAK_PASSWORD : Password should be at least 6 characters".
+  function authCode(err) {
+    const raw = String((err && (err.code || err.message)) || err || "");
+    const code = raw.split(":")[0].trim().toUpperCase().replace(/\s+/g, "_");
+    if (code.startsWith("API_KEY") || code === "CONFIGURATION_NOT_FOUND" || code === "PROJECT_NOT_FOUND") return "NOT_SET_UP";
+    return code;
+  }
+  const authMessage = (err) => AUTH_ERRORS[authCode(err)] || "Something went wrong. Try again.";
+  // Codes that mean the saved login is no longer good (as opposed to being offline).
+  const sessionGone = (err) => ["USER_DISABLED", "USER_NOT_FOUND", "TOKEN_EXPIRED", "INVALID_REFRESH_TOKEN"].includes(authCode(err));
+
+  function sessionFromAuth(json, now) {
+    return {
+      uid: String(json.localId || ""), email: cleanEmail(json.email), name: String(json.displayName || "").trim().slice(0, 60),
+      idToken: String(json.idToken || ""), refreshToken: String(json.refreshToken || ""),
+      expiresAt: now + (Number(json.expiresIn) || 3600) * 1000, verified: !!json.emailVerified,
+    };
+  }
+  function sessionFromRefresh(session, json, now) {
+    return { ...session, idToken: String(json.id_token || ""), refreshToken: String(json.refresh_token || session.refreshToken),
+      expiresAt: now + (Number(json.expires_in) || 3600) * 1000 };
+  }
+  const tokenFresh = (s, now) => !!(s && s.idToken && s.expiresAt - now > 60000);
+  function validSession(s) {
+    return !!(s && typeof s === "object" && typeof s.uid === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(s.uid)
+      && validEmail(s.email) && typeof s.refreshToken === "string" && s.refreshToken.length > 0);
+  }
+  function parseSession(text) {
+    let s; try { s = JSON.parse(text); } catch (_) { return null; }
+    return validSession(s) ? s : null;
+  }
+  // Each account keeps its data under its own key on the phone.
+  const dataKey = (uid) => `asef-data:${uid}`;
+  const snapKey = (uid) => `asef-snapshots:${uid}`;
+
   const api = {
     SCHEMA, CURRENCIES, SYMBOLS, DEFAULT_RATES, DEFAULT_CATEGORIES,
     isoDate, parseDate, addDays, isDay, today,
@@ -879,6 +946,8 @@
     RATES_URL, coinId, cleanQuote, priceRequests, ratesFromApi, stockFromApi, quoteValue, unitPrice, applyPrices,
     upcomingBills, billNotifications, notificationId, budgetCrossing, monthReport, parseAppLink,
     validPin, hashPin, makeLock, checkPin, lockoutSeconds, addSnapshot, hasSnapshot, withoutLock, restoreKeepingLock,
+    AUTH_URL, TOKEN_URL, cleanEmail, validEmail, passwordProblem, authCode, authMessage, sessionGone,
+    sessionFromAuth, sessionFromRefresh, tokenFresh, validSession, parseSession, dataKey, snapKey,
     addHustle, hustleStats, addGoal, goalSaved, goalStatus,
     ASSET_KINDS, addAsset, setAssetValue, assetValueAt, assetFlows, assetStats, netWorth, netWorthSeries, allocation,
   };

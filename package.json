@@ -1,6 +1,6 @@
 {
   "name": "asef",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "ASEF: track daily income, expenses and balance in MAD, EUR and USD, and build wealth.",
   "scripts": {

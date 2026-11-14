@@ -522,3 +522,43 @@ test("app links open the add sheet", () => {
   assert.deepEqual(L.parseAppLink("asef://add?type=evil"), { action: "add", type: "expense" });
   assert.equal(L.parseAppLink("https://x.com"), null);
 });
+
+test("accounts: email and password checks", () => {
+  assert.equal(L.cleanEmail("  Me@Mail.COM "), "me@mail.com");
+  assert.ok(L.validEmail("me@mail.com"));
+  assert.ok(!L.validEmail("me@mail"));
+  assert.ok(!L.validEmail("me mail@x.com"));
+  assert.equal(L.passwordProblem("abc123"), "Use at least 8 characters.");
+  assert.equal(L.passwordProblem("abcdefgh"), "Use letters and at least one number.");
+  assert.equal(L.passwordProblem("12345678"), "Use letters and at least one number.");
+  assert.equal(L.passwordProblem("asef2026"), null);
+});
+
+test("accounts: Firebase error codes become plain messages", () => {
+  assert.equal(L.authCode({ message: "WEAK_PASSWORD : Password should be at least 6 characters" }), "WEAK_PASSWORD");
+  assert.equal(L.authMessage({ message: "EMAIL_EXISTS" }), "There is already an account with this email. Log in instead.");
+  assert.equal(L.authMessage({ message: "INVALID_LOGIN_CREDENTIALS" }), "Wrong email or password.");
+  assert.equal(L.authMessage({ code: "NETWORK" }), "No internet connection. Check it and try again.");
+  assert.equal(L.authCode({ message: "API key not valid. Please pass a valid API key." }), "NOT_SET_UP");
+  assert.equal(L.authMessage("SOMETHING_NEW"), "Something went wrong. Try again.");
+  assert.ok(L.sessionGone({ message: "USER_DISABLED" }));
+  assert.ok(L.sessionGone({ message: "TOKEN_EXPIRED" }));
+  assert.ok(!L.sessionGone({ code: "NETWORK" }));
+});
+
+test("accounts: sessions are built, renewed and checked", () => {
+  const now = 1_000_000;
+  const s = L.sessionFromAuth({ localId: "abcDEF123", email: "Me@Mail.com", displayName: " Sami ", idToken: "t1", refreshToken: "r1", expiresIn: "3600" }, now);
+  assert.deepEqual(s, { uid: "abcDEF123", email: "me@mail.com", name: "Sami", idToken: "t1", refreshToken: "r1", expiresAt: now + 3600000, verified: false });
+  assert.ok(L.tokenFresh(s, now));
+  assert.ok(!L.tokenFresh(s, now + 3590000));
+  const r = L.sessionFromRefresh(s, { id_token: "t2", refresh_token: "r2", expires_in: "3600" }, now + 5000);
+  assert.equal(r.idToken, "t2"); assert.equal(r.refreshToken, "r2"); assert.equal(r.email, "me@mail.com");
+  assert.ok(L.validSession(s));
+  assert.deepEqual(L.parseSession(JSON.stringify(s)), s);
+  assert.equal(L.parseSession("nope"), null);
+  assert.equal(L.parseSession(JSON.stringify({ ...s, uid: "../x" })), null);
+  assert.equal(L.parseSession(JSON.stringify({ ...s, refreshToken: "" })), null);
+  assert.equal(L.dataKey("abc"), "asef-data:abc");
+  assert.equal(L.snapKey("abc"), "asef-snapshots:abc");
+});
